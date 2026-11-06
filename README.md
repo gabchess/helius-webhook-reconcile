@@ -108,7 +108,7 @@ cargo run -q -p webhook-reconcile --bin helius-triage -- --ticket fixtures/triag
 
 The reply repeats the data tags from the report (reference `run live`, received `mocked` here), so a mocked gap is never presented as a real loss. Its quotes are whole sentences copied from `fixtures/helius-faq-webhooks.md`, a snapshot of the Helius webhooks FAQ with its URL and fetch date in the first line. A test fails if a quote is not in the snapshot. This is a template over a diff and a pinned page, not retrieval over a corpus.
 
-AI judgment sits behind `--ai` and is off by default. With the flag off, keyword rules decide and no model is called, which `triage_flag_off_calls_no_model` proves with a recording fake. With `--ai`, TypeSafe Jev answers one question: is this a webhook delivery ticket? Its answer only decides whether to draft. The model never sees the ticket text: the request carries only the ticket's lowercase letter words of 1 to 15 letters (`ticket_words`), so no digit, symbol or long string leaves the machine. A secret made only of letters (15 or fewer) or a short letter fragment of a longer one can still survive, and a test pins that limit. `--ai --jev-from fixtures/jev-classify-mocked.json` replays the fixture offline. The fixture is `mocked`: hand-built from Jev's documented response shape, with invented probabilities. The live Jev call is not run.
+AI judgment sits behind `--ai` and is off by default. With the flag off, keyword rules decide and no model is called, which `triage_flag_off_calls_no_model` proves with a recording fake. With `--ai`, TypeSafe Jev answers one question: is this a webhook delivery ticket? Its answer only decides whether to draft. The model never sees the ticket text: the request carries only the ticket's words that are in `JEV_WORDS`, a fixed vocabulary, each as a constant from that list (`ticket_words`). No other text from the ticket is sent, so no digit, symbol, name or token leaves the machine. A secret reaches the model only if it is itself a vocabulary word, and tests show that `huntertwo` and the probe secrets are absent. `--ai --jev-from fixtures/jev-classify-mocked.json` replays the fixture offline. The fixture is `mocked`: hand-built from Jev's documented response shape, with invented probabilities. The live Jev call is not run.
 
 ## Setup
 
@@ -138,7 +138,7 @@ anchor build --ignore-keys && cd lab && npm ci && npm test
 | Backfill in raw webhook payload shape, replay closes the gap | passes, mocked (litesvm rows) |
 | Events of failed transactions skipped in decode | passes, mocked |
 | Live paging, `--live` refetch and backfill on Jupiter v6 (102 reference rows, slots 466122525 to 466122534, page limit 40). 7 missing and 7 backfill payloads, against the mocked received set from chunk 1, so the 7 are an artifact of the mock | run live (2026-11-06, key never printed), received set mocked |
-| Support triage: diff report to drafted reply, verbatim FAQ quotes, tags repeated, failed rows not called lost | passes, mocked (report from the run live reference and a mocked received set) |
+| Support triage: diff report to drafted reply, verbatim FAQ quotes, tags repeated, failed rows not called lost without naming the webhook type | passes, mocked (report from the run live reference and a mocked received set) |
 | Jev ticket classifier behind `--ai`, off by default, flag off calls no model | passes, mocked (hand-built fixture). Live Jev call: not run |
 | CI | runs on every pull request (`rust` and `anchor` checks) |
 

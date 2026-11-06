@@ -295,8 +295,8 @@ fn no_secret_shape_reaches_the_jev_request() {
         for w in words {
             let w = w.as_str().unwrap();
             assert!(
-                (1..=15).contains(&w.len()) && w.bytes().all(|b| b.is_ascii_lowercase()),
-                "`{w}` is not an allowlisted word: {text}"
+                JEV_WORDS.contains(&w),
+                "`{w}` is not a vocabulary word: {text}"
             );
         }
     }
@@ -333,33 +333,85 @@ fn a_ticket_that_holds_a_secret_still_reaches_the_model_as_words_only() {
 }
 
 #[test]
-fn the_words_are_lowercase_letters_in_order() {
+fn the_words_are_vocabulary_words_in_order() {
     let words = |s: &str| ticket_words(&Ticket { text: s.into() });
     assert_eq!(
         words("My WEBHOOK Stopped, my webhook"),
         ["my", "webhook", "stopped", "my", "webhook"]
     );
     assert_eq!(
-        words("a1b-c_d.e/f?g=h"),
-        ["a", "b", "c", "d", "e", "f", "g", "h"]
+        words("My webhook stopped at 14:00 UTC, event_id=7 isn't delivering"),
+        [
+            "my",
+            "webhook",
+            "stopped",
+            "event",
+            "isn",
+            "t",
+            "delivering"
+        ]
     );
-    assert_eq!(words("café naïve"), ["caf", "na", "ve"]);
-    assert_eq!(words("123 -- ?? 4_5"), Vec::<String>::new());
-    assert_eq!(words(""), Vec::<String>::new());
+    assert_eq!(words("a1b-c_d.e/f?g=h"), Vec::<&str>::new());
+    assert_eq!(words("café naïve"), Vec::<&str>::new());
+    assert_eq!(words("123 -- ?? 4_5"), Vec::<&str>::new());
+    assert_eq!(words(""), Vec::<&str>::new());
+    assert_eq!(words("webhookstopped"), Vec::<&str>::new());
 }
 
 #[test]
-fn a_word_is_kept_from_one_to_fifteen_letters() {
-    let words = |s: &str| ticket_words(&Ticket { text: s.into() });
-    let n = |len: usize| "a".repeat(len);
-    assert_eq!(words("i"), ["i"]);
-    assert_eq!(words(&n(15)), [n(15)]);
-    assert_eq!(words(&format!("my {} webhook", n(16))), ["my", "webhook"]);
-    assert_eq!(
-        words("my abcdefghijklmnopqrstuvwxyz webhook stopped"),
-        ["my", "webhook", "stopped"]
-    );
-    assert!(words("a--b").iter().all(|w| !w.is_empty()));
+fn the_vocabulary_is_sorted_so_the_binary_search_finds_every_word() {
+    assert!(JEV_WORDS.len() > 50);
+    for pair in JEV_WORDS.windows(2) {
+        assert!(
+            pair[0] < pair[1],
+            "`{}` is not before `{}`",
+            pair[0],
+            pair[1]
+        );
+    }
+    for w in JEV_WORDS {
+        assert!(
+            !w.is_empty() && w.bytes().all(|b| b.is_ascii_lowercase()),
+            "`{w}` is not a lowercase a to z word"
+        );
+        let found = ticket_words(&Ticket {
+            text: w.to_string(),
+        });
+        assert_eq!(found, [*w], "`{w}` is in the list but is not found");
+    }
+}
+
+#[test]
+fn each_request_word_is_a_constant_from_the_vocabulary() {
+    let mut texts: Vec<String> = secret_tickets().into_iter().map(|(t, _)| t).collect();
+    for f in [
+        "triage-ticket-webhook-stopped.txt",
+        "triage-ticket-billing.txt",
+        "triage-ticket-vague.txt",
+    ] {
+        texts.push(text(f));
+    }
+    texts.push(JEV_WORDS.join(" ").to_uppercase());
+    for t in texts {
+        let ticket = Ticket { text: t.clone() };
+        let request = jev_request(&ticket);
+        let sent = request["state"]["ticket"]["words"].as_array().unwrap();
+        let words = ticket_words(&ticket);
+        assert_eq!(sent.len(), words.len(), "{t}");
+        for (sent, word) in sent.iter().zip(&words) {
+            assert_eq!(sent.as_str().unwrap(), *word, "{t}");
+            assert!(
+                JEV_WORDS.contains(word),
+                "`{word}` is not in JEV_WORDS: {t}"
+            );
+            assert!(
+                JEV_WORDS
+                    .iter()
+                    .any(|v| std::ptr::eq(v.as_ptr(), word.as_ptr())),
+                "`{word}` is a copy of ticket text, not a constant from JEV_WORDS: {t}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -642,6 +694,27 @@ fn the_real_case_asks_for_the_webhook_type_before_calling_anything_lost() {
 }
 
 #[test]
+fn the_real_case_does_not_claim_delivery_or_completeness_it_cannot_see() {
+    let r = reply(&customer_report(vec![row("s", false)]));
+    for gone in [
+        "while they were sent",
+        "will not arrive again",
+        "lists every successful transaction",
+    ] {
+        assert!(!r.contains(gone), "`{gone}` in:\n{r}");
+    }
+    for kept in [
+        "This report does not show whether Helius attempted delivery or used up its retries.",
+        "your log may have missed these events",
+        "or the webhook may have been disabled.",
+        "The reference lists the address's successful transactions, not only the ones your webhook matches",
+    ] {
+        assert!(r.contains(kept), "`{kept}` missing in:\n{r}");
+    }
+    assert!(r.contains(RETRY_QUOTE) && r.contains(LOST_QUOTE), "{r}");
+}
+
+#[test]
 fn missing_or_unknown_provenance_is_never_real() {
     // No tag at all, and a tag that is not defined.
     for (reference, received) in [
@@ -796,12 +869,38 @@ fn triage_failed_rows_are_not_called_lost() {
         "{r}"
     );
     assert!(
-        r.contains("Of the never-received rows, 2 failed on chain. They are not lost events."),
+        r.contains("Of the never-received rows, 2 failed on chain. An enhanced webhook never sends these. A raw webhook does send failed transactions, so for a raw webhook please confirm its filters before treating them as missing."),
         "{r}"
     );
     assert!(r.contains(FAILED_QUOTE), "{r}");
+    assert!(!r.contains("not lost events"), "{r}");
+    assert!(!r.contains("Nothing is lost"), "{r}");
 
-    let only_failed = reply(&report_of(
+    for tags in [
+        ("run live", "run live"),
+        ("mocked", "run live"),
+        ("mocked", "mocked"),
+    ] {
+        let only_failed = reply(&report_of(
+            json!(tags.0),
+            json!(tags.1),
+            vec![],
+            vec![row("f", true)],
+            0,
+            0,
+        ));
+        assert!(
+            !only_failed.contains("Nothing is lost") && !only_failed.contains("nothing is missing"),
+            "{tags:?}\n{only_failed}"
+        );
+        assert!(only_failed.contains("1 failed on chain"), "{only_failed}");
+        assert!(
+            only_failed.contains("A raw webhook does send failed transactions, so for a raw webhook please confirm its filters before treating them as missing."),
+            "{only_failed}"
+        );
+        assert!(!only_failed.contains("not lost events"), "{only_failed}");
+    }
+    let live = reply(&report_of(
         json!("run live"),
         json!("run live"),
         vec![],
@@ -810,10 +909,28 @@ fn triage_failed_rows_are_not_called_lost() {
         0,
     ));
     assert!(
-        only_failed.contains("Nothing is lost in this window."),
-        "{only_failed}"
+        live.contains("No successful transaction is missing in this window. Every successful transaction in the reference is in the set your endpoint logged."),
+        "{live}"
     );
-    assert!(only_failed.contains("1 failed on chain"), "{only_failed}");
+    let recorded = reply(&report_of(
+        json!("mocked"),
+        json!("mocked"),
+        vec![],
+        vec![row("f", true)],
+        0,
+        0,
+    ));
+    assert!(
+        recorded
+            .contains("In this data set no successful transaction is missing. That is not proof"),
+        "{recorded}"
+    );
+
+    let none = reply(&customer_report(vec![]));
+    assert!(
+        none.contains("Nothing is lost in this window.") && !none.contains("failed on chain"),
+        "{none}"
+    );
 }
 
 #[test]
@@ -1154,10 +1271,64 @@ fn the_reference_tag_flag_reaches_a_paged_reference_with_no_tag_of_its_own() {
 }
 
 #[test]
-fn a_short_all_letter_secret_passes_whole() {
-    // The documented limit of the allowlist: only digits, symbols and long runs are removed.
-    let words = ticket_words(&Ticket {
+fn a_letters_only_secret_and_every_probe_secret_are_absent_from_the_request() {
+    let letters_only = [
+        "huntertwo",
+        "correcthorse",
+        "SECRET",
+        "hunter",
+        "two",
+        "sk",
+        "ghp",
+        "oil",
+        "abc",
+        "password",
+    ];
+    for secret in letters_only {
+        let t = Ticket {
+            text: format!("My webhook stopped. My password is {secret} and {secret}."),
+        };
+        let wire = jev_request(&t).to_string().to_lowercase();
+        assert!(
+            !wire.contains(&secret.to_lowercase()),
+            "`{secret}` is in the request:
+{wire}"
+        );
+    }
+    let t = Ticket {
         text: "Password huntertwo".into(),
-    });
-    assert_eq!(words, ["password", "huntertwo"]);
+    };
+    assert!(ticket_words(&t).is_empty());
+    assert_eq!(jev_request(&t)["state"], json!({"ticket": {"words": []}}));
+    for (text, secret) in secret_tickets() {
+        let wire = jev_request(&Ticket { text: text.clone() })
+            .to_string()
+            .to_lowercase();
+        assert!(!wire.contains(&secret.to_lowercase()), "{text}");
+        for fragment in [
+            "sk",
+            "live",
+            "abc",
+            "oil",
+            "ghp",
+            "secret",
+            "bearer",
+            "authorization",
+        ] {
+            assert!(
+                !jev_request(&Ticket { text: text.clone() })["state"]
+                    .to_string()
+                    .contains(&format!("\"{fragment}\"")),
+                "fragment `{fragment}` in the request for: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_secret_that_is_a_vocabulary_word_is_the_only_one_that_reaches_the_model() {
+    let t = Ticket {
+        text: "My key is webhook".into(),
+    };
+    assert_eq!(ticket_words(&t), ["my", "key", "is", "webhook"]);
 }

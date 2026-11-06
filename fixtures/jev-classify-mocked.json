@@ -1,6 +1,6 @@
 {
   "tag": "mocked",
-  "note": "Hand-built from the response shape documented at docs.typesafe.ai/api-reference (snapshot 2026-09-25). No Jev call was made. The answers, probabilities and confidences are invented to exercise the code paths. Each request carries the ticket as a list of lowercase words (letters a to z, 1 to 15 letters), not as free text. The live Jev path is not run.",
+  "note": "Hand-built from the response shape documented at docs.typesafe.ai/api-reference (snapshot 2026-09-25). No Jev call was made. The answers, probabilities and confidences are invented to exercise the code paths. Each request carries only the ticket's words that are in the fixed vocabulary JEV_WORDS, not the ticket text. The live Jev path is not run.",
   "exchanges": [
     {
       "ticket_file": "triage-ticket-webhook-stopped.txt",
@@ -13,7 +13,6 @@
               "stopped",
               "since",
               "about",
-              "utc",
               "yesterday",
               "my",
               "endpoint",
@@ -36,7 +35,7 @@
         "questions": {
           "kind": {
             "type": "choice",
-            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
+            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words that are in a fixed support vocabulary, in order. Every other word was removed.",
             "criteria": {
               "webhook_stopped": {
                 "what": "The customer says a Helius webhook stopped delivering events or missed events.",
@@ -85,8 +84,7 @@
               "my",
               "api",
               "key",
-              "before",
-              "friday"
+              "before"
             ]
           }
         },
@@ -94,7 +92,7 @@
         "questions": {
           "kind": {
             "type": "choice",
-            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
+            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words that are in a fixed support vocabulary, in order. Every other word was removed.",
             "criteria": {
               "webhook_stopped": {
                 "what": "The customer says a Helius webhook stopped delivering events or missed events.",
@@ -136,7 +134,6 @@
               "my",
               "integration",
               "we",
-              "see",
               "fewer",
               "transfers",
               "than",
@@ -151,7 +148,7 @@
         "questions": {
           "kind": {
             "type": "choice",
-            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
+            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words that are in a fixed support vocabulary, in order. Every other word was removed.",
             "criteria": {
               "webhook_stopped": {
                 "what": "The customer says a Helius webhook stopped delivering events or missed events.",

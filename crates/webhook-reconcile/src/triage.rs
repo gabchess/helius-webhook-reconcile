@@ -3,9 +3,10 @@
 //!
 //! Data shape:
 //! - `Ticket`: the customer's text.
-//! - `ticket_words`: the only part of a ticket that can reach a model. It is a list of lowercase
-//!   words made of the letters a to z, 1 to 15 letters each. A digit, a symbol or a long run of
-//!   letters never enters it, so no key, token, URL or signature has a path into a model request.
+//! - `ticket_words`: the only part of a ticket that can reach a model. It is the ticket's words that
+//!   are in `JEV_WORDS`, a fixed support vocabulary, and each one is returned as the constant from
+//!   that list. No other text from the ticket is sent, and no byte of a request is copied from the
+//!   ticket. A secret reaches the model only if it is itself a vocabulary word.
 //! - `TriageReport`: the `diff --json` output, reduced to what a reply needs.
 //! - `Classifier`: decides whether the ticket is a webhook-delivery ticket. `NoModel` is the default
 //!   and runs keyword rules. `JevClassifier` asks the TypeSafe Jev model and sits behind the `--ai` flag.
@@ -32,8 +33,6 @@ pub const FAILED_QUOTE: &str = "Enhanced webhooks do not send failed transaction
 pub const MIN_CONFIDENCE: f64 = 0.6;
 /// The provenance tags a diff report may carry. Any other value, or none, is unknown provenance.
 pub const KNOWN_TAGS: [&str; 3] = ["run live", "mocked", "litesvm"];
-/// The longest word a model request may carry. A longer run of letters is dropped.
-pub const MAX_WORD_LEN: usize = 15;
 pub const JEV_MODEL: &str = "jev-1.13.0";
 const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
 const SIGNATURES_SHOWN: usize = 3;
@@ -96,18 +95,127 @@ impl Classifier for NoModel {
     }
 }
 
-/// The words of a ticket that a model may see. The text is lowercased and split on anything that is
-/// not a letter a to z. Only words of 1 to `MAX_WORD_LEN` letters are kept.
-/// Nothing else from the ticket leaves the machine. There is no pattern list to keep complete:
-/// a secret has no path through, whatever its shape. A short run of letters inside a secret can
-/// survive, and a secret made only of 15 letters or fewer passes whole.
-pub fn ticket_words(ticket: &Ticket) -> Vec<String> {
+/// The only words a model request may carry, sorted for binary search. They are the words that
+/// classification needs: the webhook and delivery words of `STOPPED_WORDS`, the billing, plan and
+/// code words that the `not_for` text names, and the function words of the three mocked tickets.
+/// A name, a password, a token, a signature or a number that is not in it cannot be sent.
+pub static JEV_WORDS: &[&str] = &[
+    "about",
+    "all",
+    "and",
+    "any",
+    "api",
+    "are",
+    "before",
+    "billing",
+    "but",
+    "can",
+    "code",
+    "credits",
+    "day",
+    "days",
+    "delivering",
+    "delivery",
+    "did",
+    "didn",
+    "do",
+    "does",
+    "don",
+    "drop",
+    "dropped",
+    "duplicate",
+    "duplicates",
+    "endpoint",
+    "event",
+    "events",
+    "expected",
+    "failed",
+    "fewer",
+    "firing",
+    "for",
+    "from",
+    "getting",
+    "has",
+    "hasn",
+    "have",
+    "haven",
+    "helius",
+    "hour",
+    "hours",
+    "how",
+    "i",
+    "in",
+    "integration",
+    "is",
+    "isn",
+    "it",
+    "just",
+    "key",
+    "last",
+    "longer",
+    "missed",
+    "missing",
+    "more",
+    "my",
+    "need",
+    "no",
+    "not",
+    "of",
+    "off",
+    "on",
+    "or",
+    "plan",
+    "receive",
+    "received",
+    "receives",
+    "receiving",
+    "registered",
+    "retry",
+    "sending",
+    "since",
+    "some",
+    "something",
+    "stop",
+    "stopped",
+    "stops",
+    "t",
+    "than",
+    "the",
+    "them",
+    "this",
+    "to",
+    "today",
+    "transaction",
+    "transactions",
+    "transfers",
+    "upgrade",
+    "wallet",
+    "was",
+    "we",
+    "webhook",
+    "webhooks",
+    "week",
+    "were",
+    "what",
+    "when",
+    "why",
+    "with",
+    "working",
+    "yesterday",
+    "you",
+    "your",
+];
+
+/// The ticket's words that are in `JEV_WORDS`, in order. The text is lowercased and split on
+/// anything that is not a letter a to z. Each kept word is the constant from `JEV_WORDS`, so no byte
+/// of the result comes from the ticket. A secret reaches the model only if it is itself a
+/// vocabulary word.
+pub fn ticket_words(ticket: &Ticket) -> Vec<&'static str> {
     ticket
         .text
         .to_lowercase()
         .split(|c: char| !c.is_ascii_lowercase())
-        .filter(|w| (1..=MAX_WORD_LEN).contains(&w.len()))
-        .map(String::from)
+        .filter_map(|w| JEV_WORDS.binary_search(&w).ok().map(|i| JEV_WORDS[i]))
         .collect()
 }
 
@@ -117,8 +225,8 @@ pub trait JevApi {
     fn system_one(&self, request: &Value) -> Result<Value>;
 }
 
-/// The question set sent to Jev for one ticket. The state holds `ticket_words` and nothing else
-/// from the ticket, and the question points at it by path.
+/// The question set sent to Jev for one ticket. The state holds `ticket_words`, which are constants
+/// from `JEV_WORDS`, and nothing else from the ticket. The question points at it by path.
 pub fn jev_request(ticket: &Ticket) -> Value {
     json!({
         "state": {"ticket": {"words": ticket_words(ticket)}},
@@ -126,7 +234,7 @@ pub fn jev_request(ticket: &Ticket) -> Value {
         "questions": {
             "kind": {
                 "type": "choice",
-                "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
+                "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words that are in a fixed support vocabulary, in order. Every other word was removed.",
                 "criteria": {
                     "webhook_stopped": {
                         "what": "The customer says a Helius webhook stopped delivering events or missed events.",
@@ -265,8 +373,9 @@ pub fn select_classifier(
     }
 }
 
-/// The `diff --json` output, reduced to what a reply needs. A never-received row counts as lost
-/// only when it did not fail on chain, whatever `--status` the diff ran with.
+/// The `diff --json` output, reduced to what a reply needs. A never-received row is listed as
+/// missing only when it did not fail on chain, whatever `--status` the diff ran with. A failed row
+/// is reported on its own, because a raw webhook does send failed transactions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriageReport {
     pub reference_tag: Option<String>,
@@ -429,10 +538,17 @@ pub fn render_reply(report: &TriageReport) -> String {
     }
 
     if report.lost.is_empty() {
-        paras.push(if real {
-            "Nothing is lost in this window. Every successful transaction in the reference is in the set your endpoint logged.".to_string()
+        let none = if report.failed.is_empty() {
+            "Nothing is lost in this window."
         } else {
+            "No successful transaction is missing in this window."
+        };
+        paras.push(if real {
+            format!("{none} Every successful transaction in the reference is in the set your endpoint logged.")
+        } else if report.failed.is_empty() {
             "In this data set nothing is missing. That is not proof that nothing was lost on your webhook.".to_string()
+        } else {
+            "In this data set no successful transaction is missing. That is not proof that nothing was lost on your webhook.".to_string()
         });
     } else {
         let n = noun(report.lost.len(), "transaction", "transactions");
@@ -442,12 +558,12 @@ pub fn render_reply(report: &TriageReport) -> String {
                 signature_list(&report.lost)
             ));
             paras.push(format!(
-                "The reference lists every successful transaction for the address, so I cannot tell from it whether each one matched your webhook. Before treating them as lost, please confirm the webhook type and its transaction filters. The Helius FAQ ({FAQ_URL}) says: \"{TYPE_QUOTE}\""
+                "The reference lists the address's successful transactions, not only the ones your webhook matches, so I cannot tell from it whether each one matched your webhook. Before treating them as lost, please confirm the webhook type and its transaction filters. The Helius FAQ ({FAQ_URL}) says: \"{TYPE_QUOTE}\""
             ));
             paras.push(format!(
                 "If they do match, the FAQ says: \"{RETRY_QUOTE}\" It also says: \"{LOST_QUOTE}\""
             ));
-            paras.push("In that case these events will not arrive again by themselves, and your endpoint may have returned an error or timed out while they were sent. Helius also disables a webhook on its own when the endpoint failure rate is high, so check in the dashboard that your webhook is still enabled.".to_string());
+            paras.push("This report does not show whether Helius attempted delivery or used up its retries. Your endpoint may have returned an error or timed out, your log may have missed these events, or the webhook may have been disabled. Helius disables a webhook on its own when the endpoint failure rate is high, so check in the dashboard that your webhook is still enabled.".to_string());
             paras.push(match report.backfill_count {
                 Some(n) if n > 0 => format!(
                     "A backfill file with {n} webhook-shaped payloads is ready to replay into your endpoint."
@@ -470,7 +586,7 @@ pub fn render_reply(report: &TriageReport) -> String {
     }
     if !report.failed.is_empty() {
         paras.push(format!(
-            "Of the never-received rows, {} failed on chain. They are not lost events. The FAQ says: \"{FAILED_QUOTE}\"",
+            "Of the never-received rows, {} failed on chain. An enhanced webhook never sends these. A raw webhook does send failed transactions, so for a raw webhook please confirm its filters before treating them as missing. The FAQ says: \"{FAILED_QUOTE}\"",
             report.failed.len()
         ));
     }
