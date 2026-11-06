@@ -1,12 +1,13 @@
 //! webhook-reconcile diff --received <json> (--reference <json> | --reference-pages <json> | --live-reference --address <pubkey>)
 //!   [--slot-gte N --slot-lte N --time-gte N --time-lte N --page-limit N --max-pages N]
-//!   [--status succeeded|failed|any] [--json]
+//!   [--status succeeded|failed|any] [--json] [--received-tag <tag>] [--reference-tag <tag>]
 //!   [--idl <json>] [--refetch-from <json> | --live] [--backfill-out <path|->]
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::{fs, path::PathBuf, process::ExitCode};
+use webhook_reconcile::triage::KNOWN_TAGS;
 use webhook_reconcile::types::{RefEntry, ReferenceSet, Status};
 use webhook_reconcile::{
     decode_missing, diff, fetch_reference, parse_received, parse_reference, raw_for_missing,
@@ -68,6 +69,14 @@ enum Cmd {
         status: Status,
         #[arg(long)]
         json: bool,
+        /// The operator asserts where the received file came from, for a file with no `tag` of its
+        /// own. Pass `run live` only when the file is the customer's real endpoint log.
+        /// A file whose own tag differs is an error.
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(KNOWN_TAGS))]
+        received_tag: Option<String>,
+        /// Same for a saved reference file (`--reference` or `--reference-pages`).
+        #[arg(long, conflicts_with = "live_reference", value_parser = clap::builder::PossibleValuesParser::new(KNOWN_TAGS))]
+        reference_tag: Option<String>,
         /// Anchor IDL. Decode the `Program data:` events of the missing transactions.
         #[arg(long)]
         idl: Option<PathBuf>,
@@ -150,6 +159,23 @@ impl Paging {
     }
 }
 
+/// The tag of a file, after the operator's assertion. A file with no tag takes the asserted one.
+/// A file whose own tag differs from the assertion is an error, so a flag cannot relabel data
+/// that already says where it came from.
+fn asserted_tag(
+    file: Option<String>,
+    asserted: Option<&str>,
+    what: &str,
+) -> Result<Option<String>> {
+    match (file, asserted) {
+        (Some(f), Some(a)) if f != a => {
+            bail!("the {what} file is tagged `{f}`, which conflicts with --{what}-tag `{a}`")
+        }
+        (None, Some(a)) => Ok(Some(a.to_string())),
+        (file, _) => Ok(file),
+    }
+}
+
 fn run() -> Result<bool> {
     let cli = Cli::parse();
     let paging = paging_of(&cli.cmd);
@@ -159,6 +185,8 @@ fn run() -> Result<bool> {
         reference_pages,
         status,
         json,
+        received_tag,
+        reference_tag,
         idl,
         refetch_from,
         live,
@@ -174,17 +202,26 @@ fn run() -> Result<bool> {
         bail!("--backfill-out needs --refetch-from or --live");
     }
     let reference = match (&reference, &reference_pages) {
-        (Some(p), _) => parse_reference(&load(p)?)?,
+        (Some(p), _) => {
+            let mut set = parse_reference(&load(p)?)?;
+            set.tag = asserted_tag(set.tag, reference_tag.as_deref(), "reference")?;
+            set
+        }
         (None, Some(p)) => {
             let file = load(p)?;
             ReferenceSet {
-                tag: file.get("tag").and_then(Value::as_str).map(String::from),
+                tag: asserted_tag(
+                    file.get("tag").and_then(Value::as_str).map(String::from),
+                    reference_tag.as_deref(),
+                    "reference",
+                )?,
                 entries: paging.read(&RecordedPages::from_json(&file)?)?,
             }
         }
         (None, None) => paging.read_live(&HeliusRpc::from_env()?)?,
     };
-    let received = parse_received(&load(&received)?)?;
+    let mut received = parse_received(&load(&received)?)?;
+    received.tag = asserted_tag(received.tag, received_tag.as_deref(), "received")?;
     let report = diff(&reference, &received, status);
 
     let source: Option<Box<dyn TxSource>> = match (&refetch_from, live) {
@@ -402,6 +439,65 @@ mod tests {
         );
         let Cmd::Diff { status, .. } = cli.cmd;
         assert_eq!(status, Status::Succeeded);
+    }
+
+    #[test]
+    fn the_tag_flags_reach_the_diff_arguments() {
+        let Cmd::Diff {
+            received_tag,
+            reference_tag,
+            ..
+        } = parse(&[
+            "--reference",
+            "r",
+            "--received-tag",
+            "run live",
+            "--reference-tag",
+            "mocked",
+        ])
+        .unwrap()
+        .cmd;
+        assert_eq!(received_tag.as_deref(), Some("run live"));
+        assert_eq!(reference_tag.as_deref(), Some("mocked"));
+        let Cmd::Diff { received_tag, .. } = parse(&["--reference", "r"]).unwrap().cmd;
+        assert_eq!(received_tag, None);
+        assert_eq!(
+            kind(&["--reference", "r", "--received-tag", "real"]),
+            Some(ErrorKind::InvalidValue)
+        );
+        assert_eq!(
+            kind(&[
+                "--live-reference",
+                "--address",
+                "a",
+                "--reference-tag",
+                "run live"
+            ]),
+            Some(ErrorKind::ArgumentConflict)
+        );
+    }
+
+    #[test]
+    fn an_asserted_tag_fills_a_missing_tag_and_never_overrides_one() {
+        let some = |t: &str| Some(t.to_string());
+        assert_eq!(asserted_tag(None, None, "x").unwrap(), None);
+        assert_eq!(
+            asserted_tag(None, Some("run live"), "x").unwrap(),
+            some("run live")
+        );
+        assert_eq!(
+            asserted_tag(some("mocked"), None, "x").unwrap(),
+            some("mocked")
+        );
+        assert_eq!(
+            asserted_tag(some("run live"), Some("run live"), "x").unwrap(),
+            some("run live")
+        );
+        let err = asserted_tag(some("mocked"), Some("run live"), "received").unwrap_err();
+        assert!(
+            err.to_string().contains("conflicts with --received-tag"),
+            "{err}"
+        );
     }
 
     #[test]
