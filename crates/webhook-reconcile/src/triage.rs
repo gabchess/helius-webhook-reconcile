@@ -3,6 +3,9 @@
 //!
 //! Data shape:
 //! - `Ticket`: the customer's text.
+//! - `ticket_words`: the only part of a ticket that can reach a model. It is a list of lowercase
+//!   words made of the letters a to z, 1 to 15 letters each. A digit, a symbol or a long run of
+//!   letters never enters it, so no key, token, URL or signature has a path into a model request.
 //! - `TriageReport`: the `diff --json` output, reduced to what a reply needs.
 //! - `Classifier`: decides whether the ticket is a webhook-delivery ticket. `NoModel` is the default
 //!   and runs keyword rules. `JevClassifier` asks the TypeSafe Jev model and sits behind the `--ai` flag.
@@ -29,8 +32,8 @@ pub const FAILED_QUOTE: &str = "Enhanced webhooks do not send failed transaction
 pub const MIN_CONFIDENCE: f64 = 0.6;
 /// The provenance tags a diff report may carry. Any other value, or none, is unknown provenance.
 pub const KNOWN_TAGS: [&str; 3] = ["run live", "mocked", "litesvm"];
-pub const SECRET_REASON: &str =
-    "the ticket text matches a secret pattern, so it was not sent to the model";
+/// The longest word a model request may carry. A longer run of letters is dropped.
+pub const MAX_WORD_LEN: usize = 15;
 pub const JEV_MODEL: &str = "jev-1.13.0";
 const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
 const SIGNATURES_SHOWN: usize = 3;
@@ -44,8 +47,6 @@ pub struct Ticket {
 pub enum TicketKind {
     WebhookStopped,
     Other,
-    /// The ticket matched a secret pattern and was not sent to a model.
-    HoldsSecret,
 }
 
 /// `confidence` is `None` for rule-based classification, which has no probabilities.
@@ -95,40 +96,19 @@ impl Classifier for NoModel {
     }
 }
 
-/// True when the text looks like it carries a secret: an `api-key=` string, a Bearer token, a URL
-/// with a query string, or a long base58 or hex token. The `--ai` path refuses such a ticket.
-/// Redaction is not tried, because a refusal leaves no text to leak.
-pub fn looks_like_secret(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    if ["api-key", "api_key", "apikey"]
-        .iter()
-        .any(|k| lower.contains(&format!("{k}=")) || lower.contains(&format!("{k}:")))
-    {
-        return true;
-    }
-    let token_char = |c: char| c.is_ascii_alphanumeric() || "-_.~+/=".contains(c);
-    if lower.match_indices("bearer ").any(|(i, m)| {
-        lower[i + m.len()..]
-            .chars()
-            .take_while(|c| token_char(*c))
-            .count()
-            >= 8
-    }) {
-        return true;
-    }
-    if lower.split_whitespace().any(|w| {
-        w.find("https://")
-            .or_else(|| w.find("http://"))
-            .is_some_and(|i| w[i..].contains('?'))
-    }) {
-        return true;
-    }
-    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
-        .any(|run| {
-            let t: String = run.chars().filter(|c| *c != '-' && *c != '_').collect();
-            t.len() >= 32
-                && (t.chars().all(|c| c.is_ascii_hexdigit()) || bs58::decode(&t).into_vec().is_ok())
-        })
+/// The words of a ticket that a model may see. The text is lowercased and split on anything that is
+/// not a letter a to z. Only words of 1 to `MAX_WORD_LEN` letters are kept.
+/// Nothing else from the ticket leaves the machine. There is no pattern list to keep complete:
+/// a secret has no path through, whatever its shape. A short run of letters inside a secret can
+/// survive, and a secret made only of 15 letters or fewer passes whole.
+pub fn ticket_words(ticket: &Ticket) -> Vec<String> {
+    ticket
+        .text
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_lowercase())
+        .filter(|w| (1..=MAX_WORD_LEN).contains(&w.len()))
+        .map(String::from)
+        .collect()
 }
 
 /// One call to the TypeSafe `systemone` endpoint. The live implementation is `JevHttp`.
@@ -137,16 +117,16 @@ pub trait JevApi {
     fn system_one(&self, request: &Value) -> Result<Value>;
 }
 
-/// The question set sent to Jev for one ticket. The ticket text sits in its own state field and
-/// the question points at it by path.
+/// The question set sent to Jev for one ticket. The state holds `ticket_words` and nothing else
+/// from the ticket, and the question points at it by path.
 pub fn jev_request(ticket: &Ticket) -> Value {
     json!({
-        "state": {"ticket": {"text": ticket.text}},
+        "state": {"ticket": {"words": ticket_words(ticket)}},
         "model": JEV_MODEL,
         "questions": {
             "kind": {
                 "type": "choice",
-                "instructions": "Which kind of support request is the text in `ticket.text`?",
+                "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
                 "criteria": {
                     "webhook_stopped": {
                         "what": "The customer says a Helius webhook stopped delivering events or missed events.",
@@ -201,12 +181,6 @@ impl<A: JevApi> JevClassifier<A> {
 
 impl<A: JevApi> Classifier for JevClassifier<A> {
     fn classify(&self, ticket: &Ticket) -> Result<Classification> {
-        if looks_like_secret(&ticket.text) {
-            return Ok(Classification {
-                kind: TicketKind::HoldsSecret,
-                confidence: None,
-            });
-        }
         parse_jev_response(&self.api.system_one(&jev_request(ticket))?)
     }
 }
@@ -391,9 +365,6 @@ pub fn triage(
     classifier: &dyn Classifier,
 ) -> Result<Draft> {
     let c = classifier.classify(ticket)?;
-    if c.kind == TicketKind::HoldsSecret {
-        return Ok(Draft::NeedsHuman(SECRET_REASON.into()));
-    }
     if c.kind != TicketKind::WebhookStopped {
         return Ok(Draft::NeedsHuman(
             "this is not a webhook delivery ticket".into(),
@@ -435,12 +406,18 @@ fn signature_list(signatures: &[String]) -> String {
 }
 
 /// Render the reply. Quotes are whole FAQ sentences in straight double quotes, and nothing else
-/// in the reply uses double quotes. Unless both tags are `run live`, the reply stops after the set
-/// difference: no retry, permanent-loss, endpoint or backfill claim.
+/// in the reply uses double quotes. Unless both tags are `run live`, the opening names no customer
+/// endpoint or webhook address, and the reply stops after the set difference: no retry,
+/// permanent-loss, endpoint or backfill claim.
 pub fn render_reply(report: &TriageReport) -> String {
     let real = report.is_real();
     let mut paras = vec![
-        "Thanks for the detail. I compared the signatures your endpoint received with Helius's own transaction history for your webhook address.".to_string(),
+        if real {
+            "Thanks for the detail. I compared the signatures your endpoint received with Helius's own transaction history for your webhook address."
+        } else {
+            "Thanks for the detail. I compared the reference and received signature sets in this report."
+        }
+        .to_string(),
         format!(
             "Data used: reference `{}`, received `{}`.",
             tag_label(&report.reference_tag),

@@ -226,41 +226,140 @@ fn the_keyword_rules_ignore_a_webhook_that_is_not_a_delivery_problem() {
     );
 }
 
+const SIGNATURE_88: &str =
+    "64GSSkdqb81kjFRxqwrcKGvu3Yooq2XUF9G9y6xTSohpbekxTV2ttmxhZe9FTNTg39B2TC9iuGpBwdybtPrwWCNn";
+const GHP_TOKEN: &str = "ghp_l0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OI";
+const BEARER: &str = "eyJhbGciOiJIUzI1NiJ9.abc123XYZ789";
+const URL_WITH_QUERY: &str = "https://example.com/hook?api-key=abc123&x=9";
+
+/// Each ticket paired with the secret it holds.
+fn secret_tickets() -> Vec<(String, String)> {
+    let with = |secret: &str| {
+        (
+            format!("My webhook stopped. Here it is: {secret}."),
+            secret.to_string(),
+        )
+    };
+    vec![
+        (
+            "My webhook stopped. My Helius API key is SECRET-KEY-123.".into(),
+            "SECRET-KEY-123".into(),
+        ),
+        with("0123abcd-4567-89ef-0123-456789abcdef"),
+        with(GHP_TOKEN),
+        with(r#"{"api_key":"sk_live_abc123"}"#), // gitleaks:allow
+        with("api_key = abc123"),
+        with(&format!("Authorization: Bearer {BEARER}")),
+        with(URL_WITH_QUERY),
+        with(SIGNATURE_88),
+    ]
+}
+
+/// Every maximal run of non-letters, split on spaces, that holds a digit.
+fn digit_runs(text: &str) -> Vec<String> {
+    text.split(|c: char| c.is_ascii_alphabetic() || c.is_whitespace())
+        .filter(|run| run.chars().any(|c| c.is_ascii_digit()))
+        .map(String::from)
+        .collect()
+}
+
 #[test]
-fn the_ai_path_refuses_a_ticket_with_a_secret() {
-    let secrets = [
-        "My webhook stopped. url https://example.com/hook?api-key=abc",
-        "My webhook stopped. I set api-key=abc123 in the header",
-        "My webhook stopped. Authorization: Bearer abcdefgh12345678",
-        "My webhook stopped. See https://example.com/hook?token=1",
-        "My webhook stopped. key 3Zk9aXq7LmN4pRt8VwYb2CdEf5GhJ6KsMn1PqRs",
-        "My webhook stopped. key 0123456789abcdef0123456789abcdef",
-    ];
-    for text in secrets {
-        let calls = Rc::new(Cell::new(0));
-        let jev = JevClassifier::new(CountingJev {
-            calls: calls.clone(),
-            inner: recorded_jev(),
-        });
-        let draft = triage(&Ticket { text: text.into() }, &gtfa_report(), &jev).unwrap();
-        assert_eq!(draft, Draft::NeedsHuman(SECRET_REASON.into()), "{text}");
-        assert_eq!(calls.get(), 0, "the ticket was sent: {text}");
+fn no_secret_shape_reaches_the_jev_request() {
+    assert_eq!(GHP_TOKEN.len(), 40);
+    assert_eq!(SIGNATURE_88.len(), 88);
+    for (text, secret) in secret_tickets() {
+        let request = jev_request(&Ticket { text: text.clone() });
+        let wire = request.to_string().to_lowercase();
+        assert!(
+            !wire.contains(&secret.to_lowercase()),
+            "the secret is in the request: {text}\n{wire}"
+        );
+        let state = request["state"].to_string();
+        let runs = digit_runs(&text);
+        assert!(!runs.is_empty(), "{text}");
+        for run in runs {
+            assert!(
+                !state.contains(&run),
+                "`{run}` is in the request state: {text}"
+            );
+        }
+        assert!(
+            !state.chars().any(|c| c.is_ascii_digit()),
+            "a digit is in the request state: {text}\n{state}"
+        );
+        assert!(
+            request.pointer("/state/ticket/text").is_none(),
+            "the free ticket text is still in the request: {text}"
+        );
+        let words = request["state"]["ticket"]["words"].as_array().unwrap();
+        for w in words {
+            let w = w.as_str().unwrap();
+            assert!(
+                (1..=15).contains(&w.len()) && w.bytes().all(|b| b.is_ascii_lowercase()),
+                "`{w}` is not an allowlisted word: {text}"
+            );
+        }
     }
-    // The fixture tickets carry no secret, so they still reach the model.
-    for name in [
-        "triage-ticket-webhook-stopped.txt",
-        "triage-ticket-billing.txt",
-        "triage-ticket-vague.txt",
-    ] {
-        assert!(!looks_like_secret(&text(name)), "{name}");
+}
+
+#[test]
+fn a_ticket_that_holds_a_secret_still_reaches_the_model_as_words_only() {
+    struct Capture(Rc<std::cell::RefCell<Vec<Value>>>);
+    impl JevApi for Capture {
+        fn system_one(&self, request: &Value) -> Result<Value> {
+            self.0.borrow_mut().push(request.clone());
+            Ok(
+                json!({"answers": {"kind": {"type": "choice", "choice": "webhook_stopped", "confidence": 0.97}}}),
+            )
+        }
     }
-    let calls = Rc::new(Cell::new(0));
-    let jev = JevClassifier::new(CountingJev {
-        calls: calls.clone(),
-        inner: recorded_jev(),
-    });
-    triage(&stopped_ticket(), &gtfa_report(), &jev).unwrap();
-    assert_eq!(calls.get(), 1);
+    for (text, secret) in secret_tickets() {
+        let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let jev = JevClassifier::new(Capture(seen.clone()));
+        let ticket = Ticket { text: text.clone() };
+        let draft = triage(&ticket, &gtfa_report(), &jev).unwrap();
+        assert!(matches!(draft, Draft::Reply(_)), "{text}: {draft:?}");
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1, "{text}");
+        assert_eq!(seen[0], jev_request(&ticket), "{text}");
+        assert!(
+            !seen[0]
+                .to_string()
+                .to_lowercase()
+                .contains(&secret.to_lowercase()),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn the_words_are_lowercase_letters_in_order() {
+    let words = |s: &str| ticket_words(&Ticket { text: s.into() });
+    assert_eq!(
+        words("My WEBHOOK Stopped, my webhook"),
+        ["my", "webhook", "stopped", "my", "webhook"]
+    );
+    assert_eq!(
+        words("a1b-c_d.e/f?g=h"),
+        ["a", "b", "c", "d", "e", "f", "g", "h"]
+    );
+    assert_eq!(words("café naïve"), ["caf", "na", "ve"]);
+    assert_eq!(words("123 -- ?? 4_5"), Vec::<String>::new());
+    assert_eq!(words(""), Vec::<String>::new());
+}
+
+#[test]
+fn a_word_is_kept_from_one_to_fifteen_letters() {
+    let words = |s: &str| ticket_words(&Ticket { text: s.into() });
+    let n = |len: usize| "a".repeat(len);
+    assert_eq!(words("i"), ["i"]);
+    assert_eq!(words(&n(15)), [n(15)]);
+    assert_eq!(words(&format!("my {} webhook", n(16))), ["my", "webhook"]);
+    assert_eq!(
+        words("my abcdefghijklmnopqrstuvwxyz webhook stopped"),
+        ["my", "webhook", "stopped"]
+    );
+    assert!(words("a--b").iter().all(|w| !w.is_empty()));
 }
 
 #[test]
@@ -784,6 +883,36 @@ fn a_report_without_the_diff_fields_is_an_error() {
     assert!(TriageReport::from_json(&v).is_err());
 }
 
+#[test]
+fn the_opening_claims_the_customers_endpoint_only_for_run_live_data() {
+    let opening = |r: &TriageReport| reply(r).split("\n\n").next().unwrap().to_string();
+    let live = opening(&customer_report(vec![row("s", false)]));
+    assert!(live.contains("your endpoint received"), "{live}");
+    assert!(live.contains("your webhook address"), "{live}");
+
+    let not_live = [
+        (json!("run live"), json!("mocked")),
+        (json!("mocked"), json!("run live")),
+        (json!("mocked"), json!("mocked")),
+        (json!("litesvm"), json!("litesvm")),
+        (json!("run live"), json!(null)),
+        (json!(null), json!(null)),
+    ];
+    for (reference, received) in not_live {
+        for missing in [vec![], vec![row("s", false)]] {
+            let r = report_of(reference.clone(), received.clone(), missing, vec![], 0, 0);
+            let o = opening(&r);
+            for banned in ["your endpoint", "your webhook", "Helius's own"] {
+                assert!(
+                    !o.contains(banned),
+                    "`{banned}` in the opening for {reference} / {received}: {o}"
+                );
+            }
+            assert!(o.contains("in this report"), "{o}");
+        }
+    }
+}
+
 fn cli(ticket_file: &str, extra: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_helius-triage"))
         .env_remove("TYPESAFE_API_KEY")
@@ -852,4 +981,183 @@ fn cli_flag_on_replays_the_recorded_fixture() {
 fn cli_jev_from_needs_the_ai_flag() {
     let out = cli("triage-ticket-webhook-stopped.txt", &["--jev-from", "x"]);
     assert_eq!(out.status.code(), Some(2));
+}
+
+/// The commands in SKILL.md that start with `program`, as argument lists. A trailing `> file` is dropped.
+fn skill_commands(program: &str) -> Vec<Vec<String>> {
+    let skill = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../skills/helius-triage/SKILL.md"),
+    )
+    .unwrap();
+    skill
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with(program))
+        .map(|l| {
+            let mut args = Vec::new();
+            let (mut cur, mut quoted, mut started) = (String::new(), false, false);
+            for c in l.split(" > ").next().unwrap().chars() {
+                match c {
+                    '"' => {
+                        quoted = !quoted;
+                        started = true;
+                    }
+                    ' ' if !quoted => {
+                        if started {
+                            args.push(std::mem::take(&mut cur));
+                            started = false;
+                        }
+                    }
+                    c => {
+                        cur.push(c);
+                        started = true;
+                    }
+                }
+            }
+            if started {
+                args.push(cur);
+            }
+            args
+        })
+        .collect()
+}
+
+/// Run SKILL.md's step 2 and step 3 commands on a customer-shaped input set: a bare array of
+/// `{signature}` rows and a saved reference response with no tag of its own.
+fn run_documented_path(workdir: &str, drop_tag_flags: bool) -> std::process::Output {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(workdir);
+    fs::create_dir_all(&dir).unwrap();
+    let bare: Vec<Value> = json_fx("gtfa-live-received.json")["payloads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| json!({"signature": p["signature"]}))
+        .collect();
+    fs::write(dir.join("received.json"), Value::Array(bare).to_string()).unwrap();
+    let mut reference = json_fx("gtfa-live.json");
+    reference.as_object_mut().unwrap().remove("tag");
+    fs::write(dir.join("reference.json"), reference.to_string()).unwrap();
+    fs::write(
+        dir.join("ticket.txt"),
+        text("triage-ticket-webhook-stopped.txt"),
+    )
+    .unwrap();
+
+    let at = |a: String| {
+        if a.ends_with(".json") || a.ends_with(".txt") {
+            dir.join(a).to_str().unwrap().to_string()
+        } else {
+            a
+        }
+    };
+    let mut diff_args = skill_commands("webhook-reconcile diff").remove(0);
+    assert_eq!(&diff_args[..2], ["webhook-reconcile", "diff"]);
+    diff_args.drain(..2);
+    if drop_tag_flags {
+        while let Some(i) = diff_args.iter().position(|a| a.ends_with("-tag")) {
+            diff_args.drain(i..i + 2);
+        }
+    }
+    let diff = std::process::Command::new(env!("CARGO_BIN_EXE_webhook-reconcile"))
+        .arg("diff")
+        .args(diff_args.into_iter().map(at))
+        .output()
+        .unwrap();
+    assert!(
+        matches!(diff.status.code(), Some(0 | 1)),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    fs::write(dir.join("report.json"), &diff.stdout).unwrap();
+
+    let triage_args = skill_commands("helius-triage").remove(0);
+    std::process::Command::new(env!("CARGO_BIN_EXE_helius-triage"))
+        .env_remove("TYPESAFE_API_KEY")
+        .args(triage_args.into_iter().skip(1).map(at))
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn the_documented_skill_path_ends_in_a_draft() {
+    let out = run_documented_path("skill-path-draft", false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("reference `run live`, received `run live`"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("please confirm the webhook type"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn without_the_tag_flags_the_same_path_asks_a_person() {
+    let out = run_documented_path("skill-path-no-flags", true);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.starts_with("NEEDS HUMAN: the report's data tags are missing or unknown"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_tag_flag_cannot_relabel_a_file_that_has_its_own_tag() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_webhook-reconcile"))
+        .args(["diff", "--received"])
+        .arg(path("gtfa-live-received.json"))
+        .arg("--reference")
+        .arg(path("gtfa-live.json"))
+        .args(["--received-tag", "run live"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("conflicts with --received-tag"), "{stderr}");
+}
+
+#[test]
+fn the_reference_tag_flag_reaches_a_paged_reference_with_no_tag_of_its_own() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pages-tag");
+    fs::create_dir_all(&dir).unwrap();
+    let mut pages = json_fx("event-lab-pages.json");
+    pages.as_object_mut().unwrap().remove("tag");
+    fs::write(dir.join("pages.json"), pages.to_string()).unwrap();
+    let report_tags = |extra: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_webhook-reconcile"))
+            .args(["diff", "--json", "--received"])
+            .arg(path("event-lab-received.json"))
+            .arg("--reference-pages")
+            .arg(dir.join("pages.json"))
+            .args(extra)
+            .output()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+        (
+            report["reference_tag"].clone(),
+            report["received_tag"].clone(),
+        )
+    };
+    assert_eq!(report_tags(&[]), (Value::Null, json!("mocked")));
+    assert_eq!(
+        report_tags(&["--reference-tag", "litesvm"]),
+        (json!("litesvm"), json!("mocked"))
+    );
+}
+
+#[test]
+fn a_short_all_letter_secret_passes_whole() {
+    // The documented limit of the allowlist: only digits, symbols and long runs are removed.
+    let words = ticket_words(&Ticket {
+        text: "Password huntertwo".into(),
+    });
+    assert_eq!(words, ["password", "huntertwo"]);
 }

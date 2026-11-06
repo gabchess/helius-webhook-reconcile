@@ -1,20 +1,42 @@
 {
   "tag": "mocked",
-  "note": "Hand-built from the response shape documented at docs.typesafe.ai/api-reference (snapshot 2026-09-25). No Jev call was made. The answers, probabilities and confidences are invented to exercise the code paths. The live Jev path is not run.",
+  "note": "Hand-built from the response shape documented at docs.typesafe.ai/api-reference (snapshot 2026-09-25). No Jev call was made. The answers, probabilities and confidences are invented to exercise the code paths. Each request carries the ticket as a list of lowercase words (letters a to z, 1 to 15 letters), not as free text. The live Jev path is not run.",
   "exchanges": [
     {
       "ticket_file": "triage-ticket-webhook-stopped.txt",
       "request": {
         "state": {
           "ticket": {
-            "text": "My webhook stopped. Since about 14:00 UTC yesterday my endpoint receives no events for the wallet I registered. Did Helius drop them?\n"
+            "words": [
+              "my",
+              "webhook",
+              "stopped",
+              "since",
+              "about",
+              "utc",
+              "yesterday",
+              "my",
+              "endpoint",
+              "receives",
+              "no",
+              "events",
+              "for",
+              "the",
+              "wallet",
+              "i",
+              "registered",
+              "did",
+              "helius",
+              "drop",
+              "them"
+            ]
           }
         },
         "model": "jev-1.13.0",
         "questions": {
           "kind": {
             "type": "choice",
-            "instructions": "Which kind of support request is the text in `ticket.text`?",
+            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
             "criteria": {
               "webhook_stopped": {
                 "what": "The customer says a Helius webhook stopped delivering events or missed events.",
@@ -48,14 +70,31 @@
       "request": {
         "state": {
           "ticket": {
-            "text": "How do I upgrade my plan? I need more credits for my API key before Friday.\n"
+            "words": [
+              "how",
+              "do",
+              "i",
+              "upgrade",
+              "my",
+              "plan",
+              "i",
+              "need",
+              "more",
+              "credits",
+              "for",
+              "my",
+              "api",
+              "key",
+              "before",
+              "friday"
+            ]
           }
         },
         "model": "jev-1.13.0",
         "questions": {
           "kind": {
             "type": "choice",
-            "instructions": "Which kind of support request is the text in `ticket.text`?",
+            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
             "criteria": {
               "webhook_stopped": {
                 "what": "The customer says a Helius webhook stopped delivering events or missed events.",
@@ -89,14 +128,30 @@
       "request": {
         "state": {
           "ticket": {
-            "text": "Something is off with my integration. We see fewer transfers than we expected last week.\n"
+            "words": [
+              "something",
+              "is",
+              "off",
+              "with",
+              "my",
+              "integration",
+              "we",
+              "see",
+              "fewer",
+              "transfers",
+              "than",
+              "we",
+              "expected",
+              "last",
+              "week"
+            ]
           }
         },
         "model": "jev-1.13.0",
         "questions": {
           "kind": {
             "type": "choice",
-            "instructions": "Which kind of support request is the text in `ticket.text`?",
+            "instructions": "Which kind of support request do the words in `ticket.words` describe? They are the ticket's words in order, with digits, symbols and very long words removed.",
             "criteria": {
               "webhook_stopped": {
                 "what": "The customer says a Helius webhook stopped delivering events or missed events.",
