@@ -2,31 +2,27 @@
 
 Rules for any agent that changes this repo.
 
-## What this is
-`webhook-reconcile` is a Rust CLI that finds Helius webhook events that were never delivered. It diffs the signatures a webhook consumer received against a Helius reference set. It also holds a small Anchor program, `programs/event-lab`, that emits events for tests.
-
 ## Layout
 - `crates/webhook-reconcile` holds the Rust CLI and its tests.
 - `programs/event-lab` holds the Anchor program. `record_transfer` emits one `TransferRecorded` event.
-- `lab/` holds the Node test that runs the built program in LiteSVM, asserts on its events and records `fixtures/event-lab-*.json`. The payer key is fixed, so a fresh recording must equal the committed files. CI fails on any drift.
-- `crates/webhook-reconcile/src/decode.rs` decodes events through the IDL. `refetch.rs` holds the `TxSource` trait, the offline `RecordedSource` and the live `HeliusRpc`.
+- `lab/` runs the built program in LiteSVM and records `fixtures/event-lab-*.json`. The payer key is fixed, so a fresh recording must equal the committed files. CI fails on any drift.
 
 ## Run, test and lint
-There is no local cargo. Run everything in Docker. Pass the Windows form of the path to `docker -v`, because Bash remaps `$PWD`. Also set `MSYS_NO_PATHCONV=1` in the Bash tool, or Git Bash rewrites `-w /w` to `W:/`.
+Run from the repo root. In Git Bash on Windows, set `MSYS_NO_PATHCONV=1` and pass the Windows form of the repo path to `-v`.
 
 ```
-docker run --rm -v "C:/Users/gavaf/code/helius-webhook-reconcile:/w" -w /w rust:1 cargo test -p webhook-reconcile
-docker run --rm -v "C:/Users/gavaf/code/helius-webhook-reconcile:/w" -w /w rust:1 sh -c "rustup component add rustfmt clippy && cargo fmt --check && cargo clippy -p webhook-reconcile --all-targets -- -D warnings"
-docker run --rm -v "C:/Users/gavaf/code/helius-webhook-reconcile:/w" -w /w solanafoundation/anchor:v1.0.2 bash -c "export HOME=/root && anchor build --ignore-keys && cd lab && npm ci --no-audit --no-fund && npm test"
+docker run --rm -v "$PWD:/w" -w /w rust:1 cargo test -p webhook-reconcile --locked
+docker run --rm -v "$PWD:/w" -w /w rust:1 sh -c "rustup component add rustfmt clippy && cargo fmt --check && cargo clippy -p webhook-reconcile --all-targets -- -D warnings"
+docker run --rm -v "$PWD:/w" -w /w solanafoundation/anchor:v1.0.2 bash -c "export HOME=/root && anchor build --ignore-keys && cd lab && npm ci --no-audit --no-fund && npm test"
 ```
 
-CI runs the same steps. The required check names on `main` are `rust` and `anchor`. Do not rename those jobs.
+CI runs the same steps. The required checks on `main` are `rust` and `anchor`. Do not rename those jobs.
 
-## Key rule
-`HELIUS_API_KEY` comes only from `C:/Users/gavaf/.secrets/helius.env`. Load it in the subshell of one command, for example `( set -a; . ~/.secrets/helius.env; set +a; <cmd> )`. Never print it, log it, commit it, or save a URL that contains it. Tests run offline with no key.
+## Key
+Tests run offline with no key. `HELIUS_API_KEY` is read from the environment and is needed only for `--live` and `--live-reference`. Never print, log or commit it, or save a URL that contains it.
 
-## Branches and pull requests
-- Branch names start with `claude/`. Never push to `main` and never force push.
-- One pull request is one chunk. CodeRabbit reviews it automatically. Never pass `--use-credits`.
-- A non-author agent reviews and merges. The author never approves its own pull request.
-- Every output of a live call is tagged `run live`. Recorded data is tagged `mocked` or `litesvm`.
+## Data tags
+Tag every output of a live call `run live`. Tag recorded data `mocked` or `litesvm`.
+
+## Branches
+Never push to `main` and never force push.

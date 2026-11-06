@@ -1,4 +1,4 @@
-# Offline quick start, recorded 2026-11-06 in chunk 5
+# Offline quick start, recorded 2026-11-06
 # Tags: reference run live (fixtures/gtfa-live.json, one getTransactionsForAddress call of 2026-11-06T13:15:11Z), received mocked (fixtures/gtfa-live-received.json)
 # Command: docker run --rm -v <repo>:/w -w /w rust:1 sh -c 'cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json; echo "exit $?"'
 # No key and no network.

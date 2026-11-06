@@ -1,4 +1,4 @@
-# Offline support triage, recorded 2026-11-06 in chunk 5
+# Offline support triage, recorded 2026-11-06
 # Tags: report from a run live reference and a mocked received set. Flag --ai off, so no model was called.
 # Ticket: fixtures/triage-ticket-webhook-stopped.txt
 # Command: cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json --json > /tmp/report.json; cargo run -q -p webhook-reconcile --bin helius-triage -- --ticket fixtures/triage-ticket-webhook-stopped.txt --report /tmp/report.json
