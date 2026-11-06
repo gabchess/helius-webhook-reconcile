@@ -76,7 +76,7 @@ Other flags: `--idl` decodes Anchor events. `--json` prints JSON. `--reference-p
 cargo test -p webhook-reconcile --locked
 ```
 
-Offline, no key. It prints `test result: ok`, 12 passed for the CLI and 86 passed for `tests/offline.rs`.
+Offline, no key. It prints `test result: ok`, 12 passed for the CLI and 88 passed for `tests/offline.rs`.
 
 ## Layout
 

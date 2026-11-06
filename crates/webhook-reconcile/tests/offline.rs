@@ -14,10 +14,14 @@ use webhook_reconcile::{
     RecordedPages, RecordedSource, ReferenceSource, RpcError, Window,
 };
 
-fn fx(name: &str) -> Value {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures")
-        .join(name);
+        .join(name)
+}
+
+fn fx(name: &str) -> Value {
+    let p = path(name);
     serde_json::from_str(&fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())))
         .unwrap()
 }
@@ -1855,4 +1859,48 @@ fn cli_live_reference_reaches_the_live_reader() {
     ]);
     assert_eq!(out.status.code(), Some(2));
     assert!(text(&out.stderr).contains("HELIUS_API_KEY is not set"));
+}
+
+#[test]
+fn a_tag_flag_cannot_relabel_a_file_that_has_its_own_tag() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_webhook-reconcile"))
+        .args(["diff", "--received"])
+        .arg(path("gtfa-live-received.json"))
+        .arg("--reference")
+        .arg(path("gtfa-live.json"))
+        .args(["--received-tag", "run live"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("conflicts with --received-tag"), "{stderr}");
+}
+
+#[test]
+fn the_reference_tag_flag_reaches_a_paged_reference_with_no_tag_of_its_own() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pages-tag");
+    fs::create_dir_all(&dir).unwrap();
+    let mut pages = fx("event-lab-pages.json");
+    pages.as_object_mut().unwrap().remove("tag");
+    fs::write(dir.join("pages.json"), pages.to_string()).unwrap();
+    let report_tags = |extra: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_webhook-reconcile"))
+            .args(["diff", "--json", "--received"])
+            .arg(path("event-lab-received.json"))
+            .arg("--reference-pages")
+            .arg(dir.join("pages.json"))
+            .args(extra)
+            .output()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+        (
+            report["reference_tag"].clone(),
+            report["received_tag"].clone(),
+        )
+    };
+    assert_eq!(report_tags(&[]), (Value::Null, json!("mocked")));
+    assert_eq!(
+        report_tags(&["--reference-tag", "litesvm"]),
+        (json!("litesvm"), json!("mocked"))
+    );
 }
