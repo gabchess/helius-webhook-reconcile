@@ -1,6 +1,6 @@
 # helius-webhook-reconcile
 
-A Rust CLI that finds the Helius webhook events your endpoint never received. It diffs the signatures you logged against `getTransactionsForAddress`, refetches only the missing ones, and writes them as webhook payloads you can replay.
+A Rust CLI that finds the transactions missing from your webhook log. It diffs the signatures you logged against what Helius has on chain (`getTransactionsForAddress`), refetches only the missing ones, and writes them as webhook payloads you can replay.
 
 The Helius webhooks FAQ says: "If all retry attempts fail, the event is permanently lost" ([source](https://www.helius.dev/docs/faqs/webhooks), read 2026-11-06). This tool covers the step after that.
 
@@ -70,8 +70,6 @@ Rows that your webhook's filters exclude are not missing. Check the filters befo
 
 Other flags: `--idl` decodes Anchor events. `--json` prints JSON. `--reference-pages` and `--refetch-from` replay recorded responses offline.
 
-`helius-triage` drafts a support reply from a `--json` report. See [skills/helius-triage/SKILL.md](skills/helius-triage/SKILL.md).
-
 ## How to know it works
 
 ```
@@ -83,11 +81,10 @@ Offline, no key. On 2026-11-06 it printed `test result: ok`, 142 passed ([run lo
 ## Layout
 
 ```
-crates/webhook-reconcile/   # the CLI: diff, paging, refetch, decode, backfill, triage
+crates/webhook-reconcile/   # the CLI: diff, paging, refetch, decode, backfill
 programs/event-lab/         # Anchor test program
 lab/                        # LiteSVM recorder for fixtures/
-fixtures/                   # recorded Helius responses, tickets, FAQ snapshot
-skills/helius-triage/       # triage skill
+fixtures/                   # recorded Helius responses and test inputs
 docs/run-log/               # recorded runs
 ```
 
