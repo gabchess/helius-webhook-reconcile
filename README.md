@@ -2,6 +2,8 @@
 
 A Rust CLI that finds Helius webhook events that were never delivered, by diffing what your consumer received against a Helius reference set.
 
+The tags in this README say where each data set came from: `run live` means recorded from a real Helius call, `mocked` means built by hand, and `litesvm` means recorded from the event-lab program running in LiteSVM.
+
 Proof from the recorded run in [docs/run-log/2026-11-06-quickstart-offline.txt](docs/run-log/2026-11-06-quickstart-offline.txt): `reference 100 (run live), received 97 (mocked), status succeeded`, then `missing: 2`. The reference is one real getTransactionsForAddress call. The received set is mocked, so the 2 missing rows test the tool and are not a real loss.
 
 Demo script: [docs/demo.tape](docs/demo.tape), for charmbracelet/vhs. It is not rendered yet, because vhs is not installed on the build machine. [docs/demo.txt](docs/demo.txt) is the transcript of the same commands.
@@ -12,8 +14,10 @@ One command, no key, no network. It diffs a recorded Helius reference (100 rows 
 
 ```
 cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json  # diff the mocked received set against the recorded reference
-echo $?  # 1 means events are missing
+echo $?  # prints 1, the expected result here, because events are missing
 ```
+
+Exit code 1 is the expected result for this data, not an error. Exit 0 means nothing is missing. Exit 2 means the run failed, for example on bad input.
 
 Output, with the reference `run live` and the received set `mocked`:
 
@@ -30,7 +34,7 @@ extra (received, not in reference): 0
 1
 ```
 
-The reference holds 5 never-received rows, and 3 of them failed on chain. Enhanced webhooks do not send failed transactions, so `--status succeeded` (the default) leaves them out and counts them on the "not counted" line. `--status any` lists all 5. The mocked received set includes failed transactions on purpose, to exercise the filter.
+The reference holds 5 rows that were never received. 2 succeeded on chain and are listed as missing. 3 failed on chain and are not counted. Enhanced webhooks do not send failed transactions, so `--status succeeded` (the default) leaves them out and counts them on the "not counted" line. `--status any` lists all 5. The mocked received set includes failed transactions on purpose, to exercise the filter.
 
 No local cargo? Run the same command in Docker with `docker run --rm -v "$PWD:/w" -w /w rust:1 cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json`.
 
@@ -50,11 +54,18 @@ The job post (https://jobs.ashbyhq.com/helius/e98b2c54-2baa-4bc5-8bd8-eb5b1b35b9
 2. Triage. The quick start command prints the signatures that the reference has and the received set lacks. Code: `crates/webhook-reconcile/src/main.rs` and `src/lib.rs`. The received set is mocked.
 3. Reproduce. `fixtures/gtfa-live.json` is a recorded Helius reference (run live), so the same gap shows on any machine with no key. On Helius itself, the live run in [docs/run-log/2026-11-06-live-jupiter-v6.txt](docs/run-log/2026-11-06-live-jupiter-v6.txt) paged 102 reference rows for Jupiter v6 (run live) and found 7 missing against the mocked received set, so the 7 are an artifact of the mock and not a loss.
 4. Backfill. `--backfill-out backfill.json`, with `--refetch-from` or `--live`, writes the missing transactions as raw webhook payloads, oldest slot first, ready to replay into the endpoint. Proof: `backfill_has_the_raw_webhook_shape_and_replays_the_gap` in `tests/offline.rs` (mocked, rows from litesvm). The live run above wrote 7 payloads (run live refetch, mocked received set).
-5. Reply. `skills/helius-triage/SKILL.md` takes the ticket and the diff report to a drafted reply that a person reviews before it goes out. Run the quick start diff again with `--json > report.json`, then `cargo run -q -p webhook-reconcile --bin helius-triage -- --ticket fixtures/triage-ticket-webhook-stopped.txt --report report.json`. The recorded draft is in [docs/run-log/2026-11-06-triage-offline.txt](docs/run-log/2026-11-06-triage-offline.txt).
+5. Reply. `skills/helius-triage/SKILL.md` takes the ticket and the diff report to a drafted reply that a person reviews before it goes out. First write the quick start diff as a JSON report, then pass the report to the triage CLI:
+
+   ```
+   cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json --json > report.json
+   cargo run -q -p webhook-reconcile --bin helius-triage -- --ticket fixtures/triage-ticket-webhook-stopped.txt --report report.json
+   ```
+
+   The recorded draft is in [docs/run-log/2026-11-06-triage-offline.txt](docs/run-log/2026-11-06-triage-offline.txt).
 
 Two guarantees hold for the draft, and tests in `tests/triage.rs` pin both.
 
-- With `--ai`, the only ticket text the model receives is the ticket's words that are in a fixed 104-word list (`JEV_WORDS` in `src/triage.rs`).
+- With `--ai`, the triage CLI asks TypeSafe Jev, a hosted model API at `api.typesafe.ai`, whether the ticket is about webhook delivery. The only ticket text Jev receives is the ticket's words that are in a fixed 104-word list (`JEV_WORDS` in `src/triage.rs`).
 - The draft never claims a loss unless both data tags are `run live`.
 
 The job post also asks to "Automate support workflows using internal tooling, scripts and AI-assisted systems". This is that, with Rust, Anchor and the Helius APIs as the evidence.
@@ -80,7 +91,7 @@ The tool reads `HELIUS_API_KEY` from the process environment, not from `.env.exa
 
 The Anchor program `programs/event-lab` emits a `TransferRecorded` event with `emit!`. `lab/record.test.mjs` runs it in LiteSVM, checks the events with a second decoder in JavaScript, and records the `fixtures/event-lab-*.json` files that the cargo tests decode. CI re-records them and fails if any fixture changes.
 
-AI judgment sits behind `--ai` and is off by default. With the flag off, keyword rules decide and no model is called, which `triage_flag_off_calls_no_model` proves with a recording fake. With `--ai`, TypeSafe Jev (a hosted model API at `api.typesafe.ai`) answers one question, whether this is a webhook delivery ticket. `--ai --jev-from fixtures/jev-classify-mocked.json` replays the fixture offline. That fixture is mocked, hand-built from Jev's documented response shape with invented probabilities. Jev live call: not run.
+AI judgment sits behind `--ai` and is off by default. With the flag off, keyword rules decide and no model is called, which `triage_flag_off_calls_no_model` proves with a recording fake. With `--ai`, Jev answers one question only, whether this is a webhook delivery ticket. `--ai --jev-from fixtures/jev-classify-mocked.json` replays the fixture offline. That fixture is mocked, hand-built from Jev's documented response shape with invented probabilities. Jev live call: not run.
 
 ## Tests and proof
 
@@ -102,7 +113,7 @@ The cargo run of 2026-11-06 printed `test result: ok. 12 passed`, `86 passed` an
 | Anchor program `event-lab` built and recorded in LiteSVM | passes in CI (`anchor` check) |
 | Paging across an outage window (token loop guard, page cap, window bounds, empty page) | passes, mocked |
 | Backfill in raw webhook payload shape | passes, mocked (litesvm rows) |
-| Live paging, `--live` refetch and backfill on Jupiter v6, slots 466122525 to 466122534, page limit 40 | run live on 2026-11-06, 102 reference rows, 7 missing and 7 payloads against the mocked received set, so the 7 are an artifact of the mock |
+| Live paging, `--live` refetch and backfill on Jupiter v6, slots 466122525 to 466122534, page limit 40 | run live on 2026-11-06, 102 reference rows, 7 missing and 7 payloads against the mocked received set |
 | Support triage, diff report to drafted reply | passes, mocked (report from the run live reference and a mocked received set) |
 | Jev ticket classifier behind `--ai` | passes, mocked (hand-built fixture). Jev live call: not run |
 
@@ -127,7 +138,7 @@ crates/webhook-reconcile/src/decode.rs         # Anchor event decode through the
 crates/webhook-reconcile/src/backfill.rs       # raw webhook payloads for replay
 crates/webhook-reconcile/src/triage.rs         # diff report to drafted support reply
 crates/webhook-reconcile/src/bin/helius-triage.rs  # the triage CLI
-crates/webhook-reconcile/tests/                # 2 offline test files
+crates/webhook-reconcile/tests/                # offline.rs and triage.rs, which with src/main.rs hold the 142 tests
 programs/event-lab/                            # Anchor program that emits TransferRecorded
 lab/                                           # LiteSVM test that records the event-lab fixtures
 fixtures/                                      # 16 recorded inputs, tickets and the FAQ snapshot
