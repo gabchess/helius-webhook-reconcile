@@ -29,8 +29,17 @@ fn stopped_ticket() -> Ticket {
     ticket("triage-ticket-webhook-stopped.txt")
 }
 
-fn row(signature: &str, failed: bool) -> Value {
-    json!({"signature": signature, "slot": 1, "failed": failed, "logs": null})
+/// A valid signature (Base58 of 64 bytes) that carries the name, so a test can find it again.
+fn sig(name: &str) -> String {
+    let mut bytes = [0u8; 64];
+    for (i, b) in name.bytes().enumerate() {
+        bytes[i + 1] = b;
+    }
+    bs58::encode(bytes).into_string()
+}
+
+fn row(name: &str, failed: bool) -> Value {
+    json!({"signature": sig(name), "slot": 1, "failed": failed, "logs": null})
 }
 
 /// A report in the shape of `diff --json`.
@@ -58,8 +67,9 @@ fn report_of(
     .unwrap()
 }
 
+/// Both sides tagged `run live`: the only provenance the reply treats as real.
 fn customer_report(missing: Vec<Value>) -> TriageReport {
-    report_of(Value::Null, Value::Null, missing, vec![], 0, 0)
+    report_of(json!("run live"), json!("run live"), missing, vec![], 0, 0)
 }
 
 fn gtfa_report() -> TriageReport {
@@ -185,7 +195,109 @@ fn triage_flag_on_uses_the_recorded_fixture() {
 
     let vague = triage(&ticket("triage-ticket-vague.txt"), &report, &jev).unwrap();
     let vague = draft_text(vague);
-    assert!(vague.contains("confidence 0.10 is below 0.60"), "{vague}");
+    assert!(vague.contains("confidence 0.55 is below 0.60"), "{vague}");
+}
+
+#[test]
+fn a_confidence_that_is_not_a_probability_is_an_error() {
+    let answer = |confidence: Value| json!({"answers": {"kind": {"type": "choice", "choice": "webhook_stopped", "confidence": confidence}}});
+    for bad in [json!(9.0), json!(1.01), json!(-0.1), json!(1e300)] {
+        assert!(parse_jev_response(&answer(bad.clone())).is_err(), "{bad}");
+    }
+    for ok in [json!(0.0), json!(1.0), json!(0.6)] {
+        assert!(parse_jev_response(&answer(ok.clone())).is_ok(), "{ok}");
+    }
+}
+
+#[test]
+fn the_keyword_rules_ignore_a_webhook_that_is_not_a_delivery_problem() {
+    let kind = |s: &str| NoModel.classify(&Ticket { text: s.into() }).unwrap().kind;
+    assert_eq!(
+        kind("My webhook isn't on the paid plan. How do I upgrade?"),
+        TicketKind::Other
+    );
+    assert_eq!(
+        kind("My webhook isn't receiving events"),
+        TicketKind::WebhookStopped
+    );
+    assert_eq!(
+        kind("My webhook has stopped delivering"),
+        TicketKind::WebhookStopped
+    );
+}
+
+#[test]
+fn the_ai_path_refuses_a_ticket_with_a_secret() {
+    let secrets = [
+        "My webhook stopped. url https://example.com/hook?api-key=abc",
+        "My webhook stopped. I set api-key=abc123 in the header",
+        "My webhook stopped. Authorization: Bearer abcdefgh12345678",
+        "My webhook stopped. See https://example.com/hook?token=1",
+        "My webhook stopped. key 3Zk9aXq7LmN4pRt8VwYb2CdEf5GhJ6KsMn1PqRs",
+        "My webhook stopped. key 0123456789abcdef0123456789abcdef",
+    ];
+    for text in secrets {
+        let calls = Rc::new(Cell::new(0));
+        let jev = JevClassifier::new(CountingJev {
+            calls: calls.clone(),
+            inner: recorded_jev(),
+        });
+        let draft = triage(&Ticket { text: text.into() }, &gtfa_report(), &jev).unwrap();
+        assert_eq!(draft, Draft::NeedsHuman(SECRET_REASON.into()), "{text}");
+        assert_eq!(calls.get(), 0, "the ticket was sent: {text}");
+    }
+    // The fixture tickets carry no secret, so they still reach the model.
+    for name in [
+        "triage-ticket-webhook-stopped.txt",
+        "triage-ticket-billing.txt",
+        "triage-ticket-vague.txt",
+    ] {
+        assert!(!looks_like_secret(&text(name)), "{name}");
+    }
+    let calls = Rc::new(Cell::new(0));
+    let jev = JevClassifier::new(CountingJev {
+        calls: calls.clone(),
+        inner: recorded_jev(),
+    });
+    triage(&stopped_ticket(), &gtfa_report(), &jev).unwrap();
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn text_fixtures_have_no_carriage_returns() {
+    // The Jev replay matches the ticket text byte for byte. A CRLF checkout (Git for Windows with
+    // autocrlf) would break it, so `.gitattributes` pins these files to LF.
+    let dir = path("");
+    let mut checked = 0;
+    for entry in fs::read_dir(&dir).unwrap() {
+        let file = entry.unwrap().path();
+        let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ["txt", "md", "json"].contains(&ext) {
+            let bytes = fs::read(&file).unwrap();
+            assert!(!bytes.contains(&b'\r'), "{} has a CR byte", file.display());
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 10,
+        "only {checked} text fixtures found in {dir:?}"
+    );
+}
+
+#[test]
+fn each_recorded_confidence_is_the_top_probability() {
+    let fixture = json_fx("jev-classify-mocked.json");
+    for exchange in fixture["exchanges"].as_array().unwrap() {
+        let file = exchange["ticket_file"].as_str().unwrap();
+        let answer = &exchange["response"]["answers"]["kind"];
+        let top = answer["probabilities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|p| p.as_f64().unwrap())
+            .fold(0.0, f64::max);
+        assert_eq!(answer["confidence"].as_f64().unwrap(), top, "{file}");
+    }
 }
 
 #[test]
@@ -236,6 +348,10 @@ fn the_keyword_rules_need_a_webhook_and_a_stopped_word() {
         kind("webhook MISSED two events"),
         TicketKind::WebhookStopped
     );
+    // "missing" and "isn't" are too loose: they also describe invoices and dashboards. A real
+    // missed-event ticket that uses neither word goes to a human, which is the safe side.
+    assert_eq!(kind("My webhook invoice is missing"), TicketKind::Other);
+    assert_eq!(kind("My webhook isn't in the dashboard"), TicketKind::Other);
     assert_eq!(kind("How do I pay for webhooks?"), TicketKind::Other);
     assert_eq!(kind("My RPC calls stopped working"), TicketKind::Other);
     assert_eq!(
@@ -276,7 +392,11 @@ fn triage_reply_quotes_are_verbatim() {
         has_date(header),
         "the header must carry the fetch date: {header}"
     );
-    let plain = snapshot.replace("**", "");
+    let sentences = faq_sentences(&snapshot);
+    assert!(
+        !sentences.iter().any(|s| s == "We retry up to 3 times"),
+        "the sentence splitter must not cut a sentence short"
+    );
 
     let everything = report_of(
         json!("run live"),
@@ -295,7 +415,7 @@ fn triage_reply_quotes_are_verbatim() {
     let mut seen = Vec::new();
     for r in &replies {
         for q in quotes_of(r) {
-            assert!(plain.contains(&q), "not a verbatim FAQ sentence: {q}");
+            assert!(sentences.contains(&q), "not a whole FAQ sentence: {q}");
             seen.push(q);
         }
     }
@@ -303,68 +423,184 @@ fn triage_reply_quotes_are_verbatim() {
         RETRY_QUOTE,
         LOST_QUOTE,
         DUPLICATE_QUOTE,
+        DUPLICATE_CAUSE_QUOTE,
         DEDUPE_QUOTE,
         FAILED_QUOTE,
+        TYPE_QUOTE,
     ] {
         assert!(seen.iter().any(|s| s == q), "no reply quotes: {q}");
     }
+    // A fragment of a sentence is not a whole sentence.
+    assert!(!sentences.iter().any(|s| s == "We retry up to 3 times"));
+}
+
+/// The snapshot with Markdown emphasis and quote marks removed, cut into sentences.
+fn faq_sentences(snapshot: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in snapshot.lines() {
+        let line = line.trim_start_matches('>').trim().replace("**", "");
+        let mut current = String::new();
+        let chars: Vec<char> = line.chars().collect();
+        for (i, c) in chars.iter().enumerate() {
+            current.push(*c);
+            let ends = matches!(c, '.' | '?' | '!');
+            if ends && chars.get(i + 1).is_none_or(|n| n.is_whitespace()) {
+                out.push(current.trim().to_string());
+                current.clear();
+            }
+        }
+        if !current.trim().is_empty() {
+            out.push(current.trim().to_string());
+        }
+    }
+    out
+}
+
+/// Every claim that needs real data: loss, retry failure, endpoint failure, backfill, watchdog.
+const REAL_ONLY_CLAIMS: [&str; 12] = [
+    "never reached",
+    "did not log",
+    "permanently lost",
+    "will not arrive",
+    "We retry up to",
+    "may have returned an error",
+    "timed out",
+    "backfill",
+    "disables a webhook",
+    "confirm the webhook type",
+    "Nothing is lost",
+    "ready to replay",
+];
+
+fn assert_set_difference_only(r: &str) {
+    for banned in REAL_ONLY_CLAIMS {
+        assert!(!r.contains(banned), "`{banned}` in:\n{r}");
+    }
+    assert!(r.contains("not a confirmed loss"), "{r}");
 }
 
 #[test]
 fn triage_reply_carries_both_tags() {
     let r = reply(&gtfa_report());
     assert!(r.contains("reference `run live`, received `mocked`"), "{r}");
-    assert!(r.contains("not a confirmed loss on your webhook"), "{r}");
     assert!(
         r.contains("the reference holds 2 transactions that the received set lacks"),
         "{r}"
     );
-    assert!(!r.contains("never reached your endpoint"), "{r}");
+    assert_set_difference_only(&r);
 
-    let litesvm = report_of(
-        json!("litesvm"),
-        json!("run live"),
-        vec![row("s", false)],
-        vec![],
-        0,
-        0,
-    );
-    let r = reply(&litesvm);
-    assert!(
-        r.contains("reference `litesvm`, received `run live`"),
-        "{r}"
-    );
-    assert!(r.contains("not a confirmed loss"), "{r}");
+    for (reference, received) in [
+        ("litesvm", "run live"),
+        ("run live", "litesvm"),
+        ("mocked", "mocked"),
+    ] {
+        let r = reply(&report_of(
+            json!(reference),
+            json!(received),
+            vec![row("s", false)],
+            vec![],
+            0,
+            0,
+        ));
+        assert!(
+            r.contains(&format!("reference `{reference}`, received `{received}`")),
+            "{r}"
+        );
+        assert_set_difference_only(&r);
+    }
 
-    let live = report_of(
-        json!("run live"),
-        json!("run live"),
-        vec![row("s", false)],
-        vec![],
-        0,
-        0,
-    );
+    let live = customer_report(vec![row("s", false)]);
     let r = reply(&live);
     assert!(
         r.contains("reference `run live`, received `run live`"),
         "{r}"
     );
     assert!(
-        r.contains("1 transaction in the reference never reached your endpoint: `s`."),
+        r.contains(&format!(
+            "1 transaction in the reference that the endpoint did not log: `{}`.",
+            sig("s")
+        )),
         "{r}"
     );
+    assert!(!r.contains("never reached"), "{r}");
     assert!(!r.contains("recorded sample"), "{r}");
+}
 
-    let untagged = reply(&customer_report(vec![row("s", false)]));
+#[test]
+fn the_real_case_asks_for_the_webhook_type_before_calling_anything_lost() {
+    let r = reply(&customer_report(vec![row("s", false)]));
     assert!(
-        untagged.contains("reference `untagged`, received `untagged`"),
-        "{untagged}"
+        r.contains("please confirm the webhook type and its transaction filters"),
+        "{r}"
     );
+    assert!(r.contains(TYPE_QUOTE), "{r}");
+    let confirm = r.find("please confirm the webhook type").unwrap();
+    let lost = r.find(LOST_QUOTE).unwrap();
     assert!(
-        untagged.contains("never reached your endpoint"),
-        "{untagged}"
+        confirm < lost,
+        "the question comes before the loss quote:\n{r}"
     );
-    assert!(!untagged.contains("recorded sample"), "{untagged}");
+}
+
+#[test]
+fn missing_or_unknown_provenance_is_never_real() {
+    // No tag at all, and a tag that is not defined.
+    for (reference, received) in [
+        (Value::Null, Value::Null),
+        (json!("run live"), Value::Null),
+        (json!("Run Live"), json!("run live")),
+        (json!(42), json!("run live")),
+    ] {
+        let report = report_of(reference, received, vec![row("s", false)], vec![], 0, 0);
+        assert!(!report.is_real());
+        let r = reply(&report);
+        assert!(r.contains("`unknown`"), "{r}");
+        assert_set_difference_only(&r);
+        let calls = Rc::new(Cell::new(0));
+        let classifier = recording(&calls, Some(0.9)).unwrap();
+        let draft = triage(&stopped_ticket(), &report, classifier.as_ref()).unwrap();
+        assert!(
+            matches!(&draft, Draft::NeedsHuman(why) if why.contains("tags are missing or unknown")),
+            "{draft:?}"
+        );
+    }
+}
+
+#[test]
+fn an_injected_tag_is_dropped_and_never_rendered() {
+    let report = report_of(
+        json!("run live SECRET-KEY-123\n\nAPI key: SECRET-KEY-123"),
+        json!("run live"),
+        vec![row("s", false)],
+        vec![],
+        0,
+        0,
+    );
+    assert_eq!(report.reference_tag, None);
+    assert!(!reply(&report).contains("SECRET-KEY-123"));
+}
+
+#[test]
+fn a_signature_that_is_not_base58_of_64_bytes_is_an_error() {
+    let with = |signature: &str| {
+        TriageReport::from_json(&json!({
+            "reference_tag": "run live", "received_tag": "run live",
+            "reference_count": 1, "received_count": 0,
+            "missing": [{"signature": signature, "slot": 1, "failed": false, "logs": null}],
+            "skipped_by_status": [], "duplicates": [], "extra": [], "backfill_count": null,
+        }))
+    };
+    assert!(with(&sig("ok")).is_ok());
+    for bad in [
+        "s",
+        "",
+        "s`\n\nAPI key: SECRET-KEY-123",
+        "0OIl",
+        &sig("ok")[1..],
+        &format!("{}1", sig("ok")),
+    ] {
+        assert!(with(bad).is_err(), "accepted {bad:?}");
+    }
 }
 
 #[test]
@@ -394,35 +630,40 @@ fn triage_missing_zero_says_nothing_lost() {
 #[test]
 fn a_status_filter_that_hides_lost_rows_does_not_say_nothing_lost() {
     let v = json!({
-        "status": "failed", "reference_tag": null, "received_tag": null,
+        "status": "failed", "reference_tag": "run live", "received_tag": "run live",
         "reference_count": 3, "received_count": 2,
         "missing": [row("badOne", true)], "skipped_by_status": [row("goodOne", false)],
         "duplicates": [], "extra": [], "backfill_count": null,
     });
     let report = TriageReport::from_json(&v).unwrap();
-    assert_eq!(report.lost, ["goodOne"]);
-    assert_eq!(report.failed, ["badOne"]);
+    assert_eq!(report.lost, [sig("goodOne")]);
+    assert_eq!(report.failed, [sig("badOne")]);
     let r = reply(&report);
-    assert!(r.contains("`goodOne`"), "{r}");
+    assert!(r.contains(&sig("goodOne")), "{r}");
     assert!(!r.contains("Nothing is lost"), "{r}");
 }
 
 #[test]
-fn triage_duplicates_are_explained_as_retries() {
+fn triage_duplicates_are_observed_not_blamed_on_retries() {
     let r = reply(&report_of(Value::Null, Value::Null, vec![], vec![], 2, 0));
     assert!(
         r.contains(
-            "2 signatures arrived more than once. That comes from retries and is not a bug."
+            "2 signatures appeared more than once in the received set. The data does not show why."
         ),
         "{r}"
     );
+    for banned in ["comes from retries", "is not a bug", "Helius retried"] {
+        assert!(!r.contains(banned), "`{banned}` in:\n{r}");
+    }
     assert!(
-        r.contains(DUPLICATE_QUOTE) && r.contains(DEDUPE_QUOTE),
+        r.contains(DUPLICATE_QUOTE)
+            && r.contains(DUPLICATE_CAUSE_QUOTE)
+            && r.contains(DEDUPE_QUOTE),
         "{r}"
     );
 
     let one = reply(&report_of(Value::Null, Value::Null, vec![], vec![], 1, 0));
-    assert!(one.contains("1 signature arrived more than once"), "{one}");
+    assert!(one.contains("1 signature appeared more than once"), "{one}");
 
     let none = reply(&report_of(Value::Null, Value::Null, vec![], vec![], 0, 0));
     assert!(
@@ -434,22 +675,25 @@ fn triage_duplicates_are_explained_as_retries() {
 #[test]
 fn triage_failed_rows_are_not_called_lost() {
     let report = report_of(
-        Value::Null,
-        Value::Null,
+        json!("run live"),
+        json!("run live"),
         vec![row("okLost", false), row("failedMissing", true)],
         vec![row("failedSkipped", true)],
         0,
         0,
     );
-    assert_eq!(report.lost, ["okLost"]);
-    assert_eq!(report.failed, ["failedMissing", "failedSkipped"]);
+    assert_eq!(report.lost, [sig("okLost")]);
+    assert_eq!(report.failed, [sig("failedMissing"), sig("failedSkipped")]);
     let r = reply(&report);
     assert!(
-        r.contains("1 transaction in the reference never reached your endpoint: `okLost`."),
+        r.contains(&format!(
+            "1 transaction in the reference that the endpoint did not log: `{}`.",
+            sig("okLost")
+        )),
         "{r}"
     );
     assert!(
-        !r.contains("failedMissing") && !r.contains("failedSkipped"),
+        !r.contains(&sig("failedMissing")) && !r.contains(&sig("failedSkipped")),
         "{r}"
     );
     assert!(
@@ -459,8 +703,8 @@ fn triage_failed_rows_are_not_called_lost() {
     assert!(r.contains(FAILED_QUOTE), "{r}");
 
     let only_failed = reply(&report_of(
-        Value::Null,
-        Value::Null,
+        json!("run live"),
+        json!("run live"),
         vec![],
         vec![row("f", true)],
         0,
@@ -477,8 +721,9 @@ fn triage_failed_rows_are_not_called_lost() {
 fn the_lost_signatures_are_capped_at_three() {
     let rows: Vec<Value> = (1..=5).map(|i| row(&format!("sig{i}"), false)).collect();
     let r = reply(&customer_report(rows));
-    assert!(r.contains("5 transactions in the reference never reached your endpoint: `sig1`, `sig2`, `sig3`, and 2 more."), "{r}");
-    assert!(!r.contains("sig4"), "{r}");
+    let (a, b, c) = (sig("sig1"), sig("sig2"), sig("sig3"));
+    assert!(r.contains(&format!("5 transactions in the reference that the endpoint did not log: `{a}`, `{b}`, `{c}`, and 2 more.")), "{r}");
+    assert!(!r.contains(&sig("sig4")), "{r}");
 }
 
 #[test]
@@ -493,7 +738,7 @@ fn extra_signatures_ask_for_a_wider_window() {
 fn the_backfill_line_follows_backfill_count() {
     let with = |count: Value| {
         TriageReport::from_json(&json!({
-            "reference_tag": null, "received_tag": null,
+            "reference_tag": "run live", "received_tag": "run live",
             "reference_count": 2, "received_count": 1,
             "missing": [row("s", false)], "skipped_by_status": [],
             "duplicates": [], "extra": [], "backfill_count": count,
@@ -514,7 +759,7 @@ fn the_report_reads_the_demo_diff() {
     assert_eq!((r.reference_count, r.received_count), (100, 97));
     assert_eq!((r.lost.len(), r.failed.len()), (2, 3));
     assert_eq!((r.duplicates, r.extra), (2, 0));
-    assert!(r.is_recorded());
+    assert!(!r.is_real());
 }
 
 #[test]
@@ -572,6 +817,18 @@ fn cli_flag_on_without_a_fixture_asks_for_the_key() {
     let out = cli("triage-ticket-webhook-stopped.txt", &["--ai"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("TYPESAFE_API_KEY is not set"));
+}
+
+#[test]
+fn the_help_text_calls_the_fixture_hand_built_and_mocked() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_helius-triage"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&out.stdout).replace('\n', " ");
+    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(help.contains("hand-built mocked Jev fixture"), "{help}");
+    assert!(!help.contains("Replay recorded"), "{help}");
 }
 
 #[test]

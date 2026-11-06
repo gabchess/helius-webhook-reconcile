@@ -19,11 +19,18 @@ pub const FAQ_URL: &str = "https://www.helius.dev/docs/faqs/webhooks";
 pub const RETRY_QUOTE: &str = "We retry up to 3 times with a 1-second gap between each attempt.";
 pub const LOST_QUOTE: &str = "If all retry attempts fail, the event is permanently lost — there is no re-queue or second delivery cycle.";
 pub const DUPLICATE_QUOTE: &str = "Helius may deliver the same webhook event multiple times.";
+pub const DUPLICATE_CAUSE_QUOTE: &str = "This may happen due to retry logic or network issues.";
+pub const TYPE_QUOTE: &str =
+    "Ensure the selected transaction type matches the transactions you're monitoring.";
 pub const DEDUPE_QUOTE: &str = "To handle duplicates, use the transaction signature or a unique event identifier to track which events you've already processed.";
 pub const FAILED_QUOTE: &str = "Enhanced webhooks do not send failed transactions, but raw webhooks do include both successful and failed transactions.";
 
 /// A model answer below this confidence is read by a person before any draft is made.
 pub const MIN_CONFIDENCE: f64 = 0.6;
+/// The provenance tags a diff report may carry. Any other value, or none, is unknown provenance.
+pub const KNOWN_TAGS: [&str; 3] = ["run live", "mocked", "litesvm"];
+pub const SECRET_REASON: &str =
+    "the ticket text matches a secret pattern, so it was not sent to the model";
 pub const JEV_MODEL: &str = "jev-1.13.0";
 const JEV_URL: &str = "https://api.typesafe.ai/v1/systemone";
 const SIGNATURES_SHOWN: usize = 3;
@@ -37,6 +44,8 @@ pub struct Ticket {
 pub enum TicketKind {
     WebhookStopped,
     Other,
+    /// The ticket matched a secret pattern and was not sent to a model.
+    HoldsSecret,
 }
 
 /// `confidence` is `None` for rule-based classification, which has no probabilities.
@@ -53,15 +62,22 @@ pub trait Classifier {
 /// The default classifier. Keyword rules, no key, no network.
 pub struct NoModel;
 
-const STOPPED_WORDS: [&str; 8] = [
-    "stopped",
+/// Delivery-specific phrases. A bare "missing" or "isn't" also fits invoices and dashboards.
+const STOPPED_WORDS: [&str; 14] = [
+    "webhook stopped",
+    "webhook has stopped",
+    "webhook just stopped",
+    "stopped delivering",
+    "stopped sending",
+    "stopped receiving",
+    "stopped firing",
     "missed",
-    "missing",
     "not getting",
     "not receiving",
     "no events",
-    "dropped",
-    "isn't",
+    "dropped event",
+    "isn't receiving",
+    "isn't delivering",
 ];
 
 impl Classifier for NoModel {
@@ -79,8 +95,44 @@ impl Classifier for NoModel {
     }
 }
 
+/// True when the text looks like it carries a secret: an `api-key=` string, a Bearer token, a URL
+/// with a query string, or a long base58 or hex token. The `--ai` path refuses such a ticket.
+/// Redaction is not tried, because a refusal leaves no text to leak.
+pub fn looks_like_secret(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    if ["api-key", "api_key", "apikey"]
+        .iter()
+        .any(|k| lower.contains(&format!("{k}=")) || lower.contains(&format!("{k}:")))
+    {
+        return true;
+    }
+    let token_char = |c: char| c.is_ascii_alphanumeric() || "-_.~+/=".contains(c);
+    if lower.match_indices("bearer ").any(|(i, m)| {
+        lower[i + m.len()..]
+            .chars()
+            .take_while(|c| token_char(*c))
+            .count()
+            >= 8
+    }) {
+        return true;
+    }
+    if lower.split_whitespace().any(|w| {
+        w.find("https://")
+            .or_else(|| w.find("http://"))
+            .is_some_and(|i| w[i..].contains('?'))
+    }) {
+        return true;
+    }
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .any(|run| {
+            let t: String = run.chars().filter(|c| *c != '-' && *c != '_').collect();
+            t.len() >= 32
+                && (t.chars().all(|c| c.is_ascii_hexdigit()) || bs58::decode(&t).into_vec().is_ok())
+        })
+}
+
 /// One call to the TypeSafe `systemone` endpoint. The live implementation is `JevHttp`.
-/// `RecordedJev` replays a fixture.
+/// `RecordedJev` replays a hand-built mocked Jev fixture.
 pub trait JevApi {
     fn system_one(&self, request: &Value) -> Result<Value>;
 }
@@ -128,6 +180,9 @@ pub fn parse_jev_response(response: &Value) -> Result<Classification> {
         .get("confidence")
         .and_then(Value::as_f64)
         .ok_or_else(|| anyhow!("Jev `kind` answer has no confidence"))?;
+    if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+        bail!("Jev returned a confidence outside 0 to 1");
+    }
     Ok(Classification {
         kind,
         confidence: Some(confidence),
@@ -146,6 +201,12 @@ impl<A: JevApi> JevClassifier<A> {
 
 impl<A: JevApi> Classifier for JevClassifier<A> {
     fn classify(&self, ticket: &Ticket) -> Result<Classification> {
+        if looks_like_secret(&ticket.text) {
+            return Ok(Classification {
+                kind: TicketKind::HoldsSecret,
+                confidence: None,
+            });
+        }
         parse_jev_response(&self.api.system_one(&jev_request(ticket))?)
     }
 }
@@ -180,7 +241,7 @@ impl JevApi for JevHttp {
     }
 }
 
-/// Replays recorded exchanges. A request that is not in the fixture is an error, so the fixture
+/// Replays a hand-built mocked Jev fixture. A request that is not in the fixture is an error, so the fixture
 /// holds every prompt the tests send.
 pub struct RecordedJev {
     exchanges: Vec<(Value, Value)>,
@@ -257,7 +318,13 @@ impl TriageReport {
                 .and_then(Value::as_u64)
                 .ok_or_else(|| anyhow!("report has no `{key}` number"))
         };
-        let tag = |key: &str| v.get(key).and_then(Value::as_str).map(String::from);
+        // An unknown tag is dropped, never rendered: it could carry injected text.
+        let tag = |key: &str| {
+            v.get(key)
+                .and_then(Value::as_str)
+                .filter(|t| KNOWN_TAGS.contains(t))
+                .map(String::from)
+        };
         let mut lost = Vec::new();
         let mut failed = Vec::new();
         for key in ["missing", "skipped_by_status"] {
@@ -266,6 +333,9 @@ impl TriageReport {
                     .get("signature")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("a `{key}` row has no signature"))?;
+                if !is_signature(signature) {
+                    bail!("a `{key}` row has a signature that is not Base58 of 64 bytes");
+                }
                 let row_failed = row
                     .get("failed")
                     .and_then(Value::as_bool)
@@ -290,13 +360,22 @@ impl TriageReport {
         })
     }
 
-    /// True when either side is recorded or simulated data, so a gap is a test of the tool and not
-    /// a loss on a real webhook. Untagged data is the customer's own.
-    pub fn is_recorded(&self) -> bool {
+    /// True only when both sides carry the `run live` tag. A missing, unknown, `mocked` or
+    /// `litesvm` tag is never real data, so a gap there is a test of the tool and not a loss.
+    pub fn is_real(&self) -> bool {
         [&self.reference_tag, &self.received_tag]
             .into_iter()
-            .any(|t| matches!(t.as_deref(), Some("mocked") | Some("litesvm")))
+            .all(|t| t.as_deref() == Some("run live"))
     }
+
+    pub fn has_known_tags(&self) -> bool {
+        self.reference_tag.is_some() && self.received_tag.is_some()
+    }
+}
+
+/// A transaction signature is Base58 and decodes to 64 bytes.
+pub fn is_signature(s: &str) -> bool {
+    bs58::decode(s).into_vec().is_ok_and(|b| b.len() == 64)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,6 +391,9 @@ pub fn triage(
     classifier: &dyn Classifier,
 ) -> Result<Draft> {
     let c = classifier.classify(ticket)?;
+    if c.kind == TicketKind::HoldsSecret {
+        return Ok(Draft::NeedsHuman(SECRET_REASON.into()));
+    }
     if c.kind != TicketKind::WebhookStopped {
         return Ok(Draft::NeedsHuman(
             "this is not a webhook delivery ticket".into(),
@@ -322,11 +404,16 @@ pub fn triage(
             "the classifier confidence {conf:.2} is below {MIN_CONFIDENCE:.2}"
         )));
     }
+    if !report.has_known_tags() {
+        return Ok(Draft::NeedsHuman(
+            "the report's data tags are missing or unknown, so a person must check where the data came from".into(),
+        ));
+    }
     Ok(Draft::Reply(render_reply(report)))
 }
 
 fn tag_label(tag: &Option<String>) -> &str {
-    tag.as_deref().unwrap_or("untagged")
+    tag.as_deref().unwrap_or("unknown")
 }
 
 fn noun(n: usize, one: &str, many: &str) -> String {
@@ -348,9 +435,10 @@ fn signature_list(signatures: &[String]) -> String {
 }
 
 /// Render the reply. Quotes are whole FAQ sentences in straight double quotes, and nothing else
-/// in the reply uses double quotes.
+/// in the reply uses double quotes. Unless both tags are `run live`, the reply stops after the set
+/// difference: no retry, permanent-loss, endpoint or backfill claim.
 pub fn render_reply(report: &TriageReport) -> String {
-    let recorded = report.is_recorded();
+    let real = report.is_real();
     let mut paras = vec![
         "Thanks for the detail. I compared the signatures your endpoint received with Helius's own transaction history for your webhook address.".to_string(),
         format!(
@@ -359,45 +447,47 @@ pub fn render_reply(report: &TriageReport) -> String {
             tag_label(&report.received_tag)
         ),
     ];
-    if recorded {
-        paras.push("This is recorded sample data, so any gap below is a test of the tool and not a confirmed loss on your webhook.".to_string());
+    if !real {
+        paras.push("This is recorded sample data or data of unknown origin, so any gap below is a test of the tool and not a confirmed loss on your webhook.".to_string());
     }
 
     if report.lost.is_empty() {
-        paras.push(if recorded {
-            "In this data set nothing is missing. That is not proof that nothing was lost on your webhook.".to_string()
+        paras.push(if real {
+            "Nothing is lost in this window. Every successful transaction in the reference is in the set your endpoint logged.".to_string()
         } else {
-            "Nothing is lost in this window. Every successful transaction in the reference reached your endpoint.".to_string()
+            "In this data set nothing is missing. That is not proof that nothing was lost on your webhook.".to_string()
         });
     } else {
         let n = noun(report.lost.len(), "transaction", "transactions");
-        let lead = if recorded {
-            format!(
+        if real {
+            paras.push(format!(
+                "{n} in the reference that the endpoint did not log: {}.",
+                signature_list(&report.lost)
+            ));
+            paras.push(format!(
+                "The reference lists every successful transaction for the address, so I cannot tell from it whether each one matched your webhook. Before treating them as lost, please confirm the webhook type and its transaction filters. The Helius FAQ ({FAQ_URL}) says: \"{TYPE_QUOTE}\""
+            ));
+            paras.push(format!(
+                "If they do match, the FAQ says: \"{RETRY_QUOTE}\" It also says: \"{LOST_QUOTE}\""
+            ));
+            paras.push("In that case these events will not arrive again by themselves, and your endpoint may have returned an error or timed out while they were sent. Helius also disables a webhook on its own when the endpoint failure rate is high, so check in the dashboard that your webhook is still enabled.".to_string());
+            paras.push(match report.backfill_count {
+                Some(n) if n > 0 => format!(
+                    "A backfill file with {n} webhook-shaped payloads is ready to replay into your endpoint."
+                ),
+                _ => "I can prepare a backfill file in webhook shape for these signatures so you can replay them.".to_string(),
+            });
+        } else {
+            paras.push(format!(
                 "In this data set, the reference holds {n} that the received set lacks: {}.",
                 signature_list(&report.lost)
-            )
-        } else {
-            format!(
-                "{n} in the reference never reached your endpoint: {}.",
-                signature_list(&report.lost)
-            )
-        };
-        paras.push(lead);
-        paras.push(format!(
-            "The Helius FAQ ({FAQ_URL}) says: \"{RETRY_QUOTE}\" It also says: \"{LOST_QUOTE}\""
-        ));
-        paras.push("That means these events will not arrive again by themselves. Your endpoint likely returned an error or timed out while they were sent. Helius also disables a webhook on its own when the endpoint failure rate is high, so check in the dashboard that your webhook is still enabled.".to_string());
-        paras.push(match report.backfill_count {
-            Some(n) if n > 0 => format!(
-                "A backfill file with {n} webhook-shaped payloads is ready to replay into your endpoint."
-            ),
-            _ => "I can prepare a backfill file in webhook shape for these signatures so you can replay them.".to_string(),
-        });
+            ));
+        }
     }
 
     if report.duplicates > 0 {
         paras.push(format!(
-            "{} arrived more than once. That comes from retries and is not a bug. The FAQ says: \"{DUPLICATE_QUOTE}\" It also says: \"{DEDUPE_QUOTE}\"",
+            "{} appeared more than once in the received set. The data does not show why. The FAQ says: \"{DUPLICATE_QUOTE}\" \"{DUPLICATE_CAUSE_QUOTE}\" It also says: \"{DEDUPE_QUOTE}\"",
             noun(report.duplicates, "signature", "signatures")
         ));
     }

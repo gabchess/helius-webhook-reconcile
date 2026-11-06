@@ -25,7 +25,7 @@ struct Cli {
     /// Classify the ticket with the TypeSafe Jev model. Off by default: the keyword rules run and no model is called.
     #[arg(long)]
     ai: bool,
-    /// Replay recorded Jev exchanges instead of calling the API (offline, no key).
+    /// Replay a hand-built mocked Jev fixture instead of calling the API (offline, no key).
     #[arg(long, requires = "ai")]
     jev_from: Option<PathBuf>,
 }

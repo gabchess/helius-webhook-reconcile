@@ -34,7 +34,7 @@
           "kind": {
             "type": "choice",
             "choice": "webhook_stopped",
-            "confidence": 0.94,
+            "confidence": 0.97,
             "probabilities": {
               "webhook_stopped": 0.97,
               "other": 0.03
@@ -75,7 +75,7 @@
           "kind": {
             "type": "choice",
             "choice": "other",
-            "confidence": 0.92,
+            "confidence": 0.96,
             "probabilities": {
               "webhook_stopped": 0.04,
               "other": 0.96
@@ -116,7 +116,7 @@
           "kind": {
             "type": "choice",
             "choice": "webhook_stopped",
-            "confidence": 0.1,
+            "confidence": 0.55,
             "probabilities": {
               "webhook_stopped": 0.55,
               "other": 0.45
