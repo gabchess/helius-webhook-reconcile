@@ -1,13 +1,13 @@
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Parser, Subcommand};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::io::Write;
 use std::{fs, path::PathBuf, process::ExitCode};
-use webhook_reconcile::types::{RefEntry, ReferenceSet, Status};
 use webhook_reconcile::{
-    decode_missing, diff, fetch_reference, parse_received, parse_reference, raw_for_missing,
-    refetch_missing, webhook_payload, with_logs_from_raw, HeliusRpc, Idl, RecordedPages,
-    RecordedSource, ReferenceSource, TxSource, Window,
+    decode_missing, diff, fetch_reference, load_json, parse_received, parse_reference,
+    raw_for_missing, refetch_missing, report, webhook_payload, with_logs_from_raw, HeliusRpc, Idl,
+    RecordedPages, RecordedSource, RefEntry, ReferenceSet, ReferenceSource, Status, TxSource,
+    Window,
 };
 
 /// The provenance tags a diff report may carry. Any other value, or none, is unknown provenance.
@@ -89,11 +89,6 @@ enum Cmd {
         #[arg(long)]
         backfill_out: Option<PathBuf>,
     },
-}
-
-fn load(p: &PathBuf) -> Result<Value> {
-    serde_json::from_str(&fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?)
-        .with_context(|| format!("parse {}", p.display()))
 }
 
 /// The outage window the four window flags name.
@@ -201,12 +196,12 @@ fn run() -> Result<bool> {
     }
     let reference = match (&reference, &reference_pages) {
         (Some(p), _) => {
-            let mut set = parse_reference(&load(p)?)?;
+            let mut set = parse_reference(&load_json(p)?)?;
             set.tag = asserted_tag(set.tag, reference_tag.as_deref(), "reference")?;
             set
         }
         (None, Some(p)) => {
-            let file = load(p)?;
+            let file = load_json(p)?;
             ReferenceSet {
                 tag: asserted_tag(
                     file.get("tag").and_then(Value::as_str).map(String::from),
@@ -218,12 +213,12 @@ fn run() -> Result<bool> {
         }
         (None, None) => paging.read_live(&HeliusRpc::from_env()?)?,
     };
-    let mut received = parse_received(&load(&received)?)?;
+    let mut received = parse_received(&load_json(&received)?)?;
     received.tag = asserted_tag(received.tag, received_tag.as_deref(), "received")?;
     let report = diff(&reference, &received, status);
 
     let source: Option<Box<dyn TxSource>> = match (&refetch_from, live) {
-        (Some(f), _) => Some(Box::new(RecordedSource::from_json(&load(f)?)?)),
+        (Some(f), _) => Some(Box::new(RecordedSource::from_json(&load_json(f)?)?)),
         (None, true) => Some(Box::new(HeliusRpc::from_env()?)),
         (None, false) => None,
     };
@@ -239,7 +234,7 @@ fn run() -> Result<bool> {
         (None, _) => (report.missing.clone(), None),
     };
     let decoded = match &idl {
-        Some(p) => Some(decode_missing(&Idl::parse(&load(p)?)?, &missing)?),
+        Some(p) => Some(decode_missing(&Idl::parse(&load_json(p)?)?, &missing)?),
         None => None,
     };
 
@@ -260,79 +255,14 @@ fn run() -> Result<bool> {
         }
     }
 
-    if json {
-        let report_json = json!({
-            "status": report.status,
-            "reference_tag": reference.tag, "received_tag": received.tag,
-            "reference_count": reference.entries.len(), "received_count": received.signatures.len(),
-            "missing": report.missing,
-            "skipped_by_status": report.skipped_by_status,
-            "duplicates": report.duplicates.iter().map(|(s, n)| json!({"signature": s, "times": n})).collect::<Vec<_>>(),
-            "extra": report.extra,
-            "decoded": decoded,
-            "backfill_count": payloads.as_ref().map(Vec::len),
-        });
-        writeln!(out, "{}", serde_json::to_string_pretty(&report_json)?)?;
-    } else {
-        writeln!(
-            out,
-            "reference {} ({}), received {} ({}), status {}",
-            reference.entries.len(),
-            reference.tag.as_deref().unwrap_or("untagged"),
-            received.signatures.len(),
-            received.tag.as_deref().unwrap_or("untagged"),
-            serde_json::to_value(report.status)?.as_str().unwrap_or("?"),
-        )?;
-        writeln!(out, "missing: {}", report.missing.len())?;
-        for m in &report.missing {
-            writeln!(
-                out,
-                "  {} slot={} failed={}",
-                m.signature.0,
-                m.slot.map_or("?".into(), |s| s.to_string()),
-                m.failed
-            )?;
-        }
-        if !report.skipped_by_status.is_empty() {
-            writeln!(
-                out,
-                "not counted by --status: {} (never received; rerun with --status any to list them)",
-                report.skipped_by_status.len()
-            )?;
-        }
-        writeln!(out, "duplicates: {}", report.duplicates.len())?;
-        for (s, n) in &report.duplicates {
-            writeln!(out, "  {} x{}", s.0, n)?;
-        }
-        writeln!(
-            out,
-            "extra (received, not in reference): {}",
-            report.extra.len()
-        )?;
-        for s in &report.extra {
-            writeln!(out, "  {}", s.0)?;
-        }
-        if let Some(events) = &decoded {
-            writeln!(out, "decoded events from missing txs: {}", events.len())?;
-            for e in events {
-                writeln!(
-                    out,
-                    "  {} {} {}",
-                    e.signature.0,
-                    e.event,
-                    serde_json::to_string(&e.fields)?
-                )?;
-            }
-        }
-        if let (Some(path), Some(payloads)) = (&backfill_out, &payloads) {
-            writeln!(
-                out,
-                "backfill: {} webhook payloads written to {}",
-                payloads.len(),
-                path.display()
-            )?;
-        }
-    }
+    let found = report::Findings {
+        reference: &reference,
+        received: &received,
+        diff: &report,
+        decoded: decoded.as_deref(),
+        backfill: backfill_out.as_deref().zip(payloads.as_ref().map(Vec::len)),
+    };
+    report::write(&mut out, found, json)?;
     Ok(!report.missing.is_empty())
 }
 

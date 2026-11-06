@@ -4,14 +4,14 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 use webhook_reconcile::decode::event_discriminator;
-use webhook_reconcile::paging::{page_request_body, parse_page_response};
+use webhook_reconcile::reference::{page_request_body, parse_page_response};
+use webhook_reconcile::reference::{RefEntry, Signature};
 use webhook_reconcile::refetch::{parse_batch_response, TxSource};
-use webhook_reconcile::types::{RefEntry, Signature};
 use webhook_reconcile::{
     decode_missing, dedupe_by_signature, diff, fetch_reference, parse_received, parse_reference,
-    program_data_lines, raw_for_missing, refetch_missing, types::Status, webhook_payload,
-    with_logs_from_raw, DecodeError, HeliusRpc, Idl, PageRequest, PageToken, PagingError,
-    RecordedPages, RecordedSource, ReferenceSource, RpcError, Window,
+    program_data_lines, raw_for_missing, refetch_missing, webhook_payload, with_logs_from_raw,
+    DecodeError, HeliusRpc, Idl, PageRequest, PageToken, PagingError, RecordedPages,
+    RecordedSource, ReferenceSource, RpcError, Status, Window,
 };
 
 fn path(name: &str) -> PathBuf {
@@ -34,7 +34,7 @@ fn sigs(v: &Value) -> Vec<String> {
         .collect()
 }
 
-fn names(entries: &[webhook_reconcile::types::RefEntry]) -> Vec<String> {
+fn names(entries: &[webhook_reconcile::RefEntry]) -> Vec<String> {
     entries.iter().map(|m| m.signature.0.clone()).collect()
 }
 
@@ -922,7 +922,7 @@ fn a_signature_repeated_across_pages_is_kept_once() {
     assert_eq!(names(&entries), ["a", "dup", "b"]);
 
     let received = parse_received(&json!(["a"])).unwrap();
-    let reference = webhook_reconcile::types::ReferenceSet { tag: None, entries };
+    let reference = webhook_reconcile::ReferenceSet { tag: None, entries };
     let report = diff(&reference, &received, Status::Any);
     assert_eq!(names(&report.missing), ["dup", "b"]);
 
