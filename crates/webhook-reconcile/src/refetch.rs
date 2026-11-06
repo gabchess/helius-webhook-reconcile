@@ -1,5 +1,6 @@
 //! Refetch only the missing signatures in full mode. The fetch sits behind `TxSource`, so tests replay
 //! recorded responses with no key and no network, and the live path is one small struct.
+use crate::paging::{page_request_body, parse_page_response, Page, PageRequest, ReferenceSource};
 use crate::{parse_ref_row, types::*};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -13,6 +14,12 @@ use std::time::Duration;
 pub trait TxSource {
     /// Fetch the given signatures in full mode.
     fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>>;
+
+    /// Fetch the given signatures as full transaction results, one per signature, in request order.
+    /// A source that cannot return them keeps this default, which fails.
+    fn fetch_raw(&self, _signatures: &[Signature]) -> Result<Vec<Value>> {
+        bail!("this source cannot return raw transactions")
+    }
 }
 
 /// Why a live fetch or a batch parse failed. Every field is a number, a fixed label, an error
@@ -38,6 +45,8 @@ pub enum RpcError {
     },
     /// The response did not have the expected shape.
     Decode { what: &'static str },
+    /// The server answered a getTransactionsForAddress call with a JSON-RPC error. The message is dropped.
+    JsonRpcMethod { code: Option<i64> },
 }
 
 impl fmt::Display for RpcError {
@@ -60,6 +69,12 @@ impl fmt::Display for RpcError {
             Self::NotFound { signature } => write!(f, "transaction {} not found", signature.0),
             Self::BadResult { what, signature } => write!(f, "result for {}: {what}", signature.0),
             Self::Decode { what } => write!(f, "Helius RPC response: {what}"),
+            Self::JsonRpcMethod { code: Some(code) } => {
+                write!(f, "getTransactionsForAddress failed with code {code}")
+            }
+            Self::JsonRpcMethod { code: None } => {
+                write!(f, "getTransactionsForAddress failed with no code")
+            }
         }
     }
 }
@@ -73,10 +88,25 @@ pub fn parse_batch_response(
     requested: &[Signature],
     batch: &Value,
 ) -> Result<Vec<RefEntry>, RpcError> {
+    Ok(parse_batch(requested, batch)?
+        .into_iter()
+        .map(|(entry, _)| entry)
+        .collect())
+}
+
+/// The same validation as `parse_batch_response`, returning the transaction results as received.
+pub fn parse_batch_raw(requested: &[Signature], batch: &Value) -> Result<Vec<Value>, RpcError> {
+    Ok(parse_batch(requested, batch)?
+        .into_iter()
+        .map(|(_, raw)| raw)
+        .collect())
+}
+
+fn parse_batch(requested: &[Signature], batch: &Value) -> Result<Vec<(RefEntry, Value)>, RpcError> {
     let items = batch.as_array().ok_or(RpcError::Decode {
         what: "batch is not a JSON array",
     })?;
-    let mut by_sig: HashMap<&Signature, RefEntry> = HashMap::new();
+    let mut by_sig: HashMap<&Signature, (RefEntry, Value)> = HashMap::new();
     for item in items {
         let idx = item
             .get("id")
@@ -118,7 +148,7 @@ pub fn parse_batch_response(
         if entry.logs.is_none() {
             return Err(bad("no meta.logMessages"));
         }
-        by_sig.insert(want, entry);
+        by_sig.insert(want, (entry, result.clone()));
     }
     requested
         .iter()
@@ -169,6 +199,50 @@ pub fn refetch_missing(missing: &[RefEntry], source: &dyn TxSource) -> Result<Ve
         .collect()
 }
 
+/// Fetch the full transaction of every missing row in one call, in the order of `missing`.
+/// Makes no call when nothing is missing. A result whose signature differs from the row it answers fails.
+pub fn raw_for_missing(missing: &[RefEntry], source: &dyn TxSource) -> Result<Vec<Value>> {
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let wanted: Vec<Signature> = missing.iter().map(|m| m.signature.clone()).collect();
+    let raws = source.fetch_raw(&wanted)?;
+    if raws.len() != wanted.len() {
+        bail!(
+            "source returned {} transactions for {} signatures",
+            raws.len(),
+            wanted.len()
+        );
+    }
+    for (want, raw) in wanted.iter().zip(&raws) {
+        let got = raw
+            .pointer("/transaction/signatures/0")
+            .and_then(Value::as_str);
+        if got != Some(want.0.as_str()) {
+            bail!("source returned a transaction that is not {}", want.0);
+        }
+    }
+    Ok(raws)
+}
+
+/// Give each missing row the logs found in its full transaction. `raws` must hold one result per row,
+/// in the same order, as `raw_for_missing` returns them.
+pub fn with_logs_from_raw(missing: &[RefEntry], raws: &[Value]) -> Result<Vec<RefEntry>> {
+    missing
+        .iter()
+        .zip(raws)
+        .map(|(m, raw)| {
+            let logs = parse_ref_row(raw, m.signature.clone())
+                .logs
+                .ok_or_else(|| anyhow!("transaction {} has no meta.logMessages", m.signature.0))?;
+            Ok(RefEntry {
+                logs: Some(logs),
+                ..m.clone()
+            })
+        })
+        .collect()
+}
+
 /// Replays recorded `getTransaction` results, keyed by signature. Records every request, so a test
 /// can prove that only the missing signatures were asked for.
 pub struct RecordedSource {
@@ -198,18 +272,32 @@ impl RecordedSource {
     }
 }
 
+impl RecordedSource {
+    fn batch_for(&self, signatures: &[Signature]) -> Value {
+        self.calls.borrow_mut().push(signatures.to_vec());
+        Value::Array(
+            signatures
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    json!({"jsonrpc": "2.0", "id": i.to_string(),
+                           "result": self.results.get(s).cloned().unwrap_or(Value::Null)})
+                })
+                .collect(),
+        )
+    }
+}
+
 impl TxSource for RecordedSource {
     fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
-        self.calls.borrow_mut().push(signatures.to_vec());
-        let batch: Vec<Value> = signatures
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                json!({"jsonrpc": "2.0", "id": i.to_string(),
-                       "result": self.results.get(s).cloned().unwrap_or(Value::Null)})
-            })
-            .collect();
-        Ok(parse_batch_response(signatures, &Value::Array(batch))?)
+        Ok(parse_batch_response(
+            signatures,
+            &self.batch_for(signatures),
+        )?)
+    }
+
+    fn fetch_raw(&self, signatures: &[Signature]) -> Result<Vec<Value>> {
+        Ok(parse_batch_raw(signatures, &self.batch_for(signatures))?)
     }
 }
 
@@ -252,7 +340,7 @@ impl HeliusRpc {
         })
     }
 
-    fn fetch_batches(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>, RpcError> {
+    fn fetch_batches(&self, signatures: &[Signature]) -> Result<Vec<Value>, RpcError> {
         let mut out = Vec::new();
         for chunk in signatures.chunks(BATCH_SIZE) {
             let body: Vec<Value> = chunk
@@ -265,7 +353,7 @@ impl HeliusRpc {
                 })
                 .collect();
             let resp = self.post(&Value::Array(body))?;
-            out.extend(parse_batch_response(chunk, &resp)?);
+            out.extend(parse_batch_raw(chunk, &resp)?);
         }
         Ok(out)
     }
@@ -281,6 +369,22 @@ impl fmt::Debug for HeliusRpc {
 
 impl TxSource for HeliusRpc {
     fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
+        let raws = self.fetch_batches(signatures)?;
+        Ok(signatures
+            .iter()
+            .zip(&raws)
+            .map(|(s, raw)| parse_ref_row(raw, s.clone()))
+            .collect())
+    }
+
+    fn fetch_raw(&self, signatures: &[Signature]) -> Result<Vec<Value>> {
         Ok(self.fetch_batches(signatures)?)
+    }
+}
+
+impl ReferenceSource for HeliusRpc {
+    fn fetch_page(&self, req: &PageRequest) -> Result<Page> {
+        let resp = self.post(&page_request_body(req))?;
+        Ok(parse_page_response(&resp)?)
     }
 }

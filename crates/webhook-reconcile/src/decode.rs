@@ -274,7 +274,9 @@ pub fn program_data_lines<'a>(logs: &'a [String], program_id: Option<&str>) -> V
     out
 }
 
-/// Decode the events of every missing transaction. Fails loudly instead of returning a short list:
+/// Decode the events of every missing transaction. A failed transaction is skipped: the runtime
+/// rolled its state back, so an event in its logs never took effect, and replaying it as an event
+/// would be wrong. Fails loudly instead of returning a short list:
 /// - a row without logs (signatures mode) gives `DecodeError::NoLogs`
 /// - a row whose logs say "Log truncated" gives `DecodeError::LogsTruncated`
 /// - a cut or oversized event payload gives an error from `Idl::decode`
@@ -292,7 +294,7 @@ pub fn decode_missing(idl: &Idl, missing: &[RefEntry]) -> Result<Vec<DecodedEven
         return Err(DecodeError::NoLogs(no_logs).into());
     }
     let mut events = Vec::new();
-    for m in missing {
+    for m in missing.iter().filter(|m| !m.failed) {
         let logs = m.logs.as_deref().unwrap_or_default();
         if logs.iter().any(|l| l.starts_with("Log truncated")) {
             return Err(DecodeError::LogsTruncated(m.signature.clone()).into());

@@ -61,6 +61,40 @@ How the decode stays honest:
 - An event payload that is cut short, or has extra bytes, is an error.
 - `--live` refetches from Helius with `getTransaction` in batches of 100. It reads `HELIUS_API_KEY` from the environment and needs the key. `--refetch-from` and `--live` exclude each other.
 
+### Page across an outage window and replay the gap (offline)
+
+A long outage has more rows than one page holds. `--reference-pages` replays recorded getTransactionsForAddress pages through the same paging loop that `--live-reference` uses on Helius. `--backfill-out` writes the missing transactions as an array of webhook payloads, oldest slot first, so a team can post them to the endpoint that never got them.
+
+```
+cargo run -q -p webhook-reconcile -- diff --received fixtures/event-lab-received.json --reference-pages fixtures/event-lab-pages.json --status any --refetch-from fixtures/event-lab-refetch.json --idl fixtures/event_lab.idl.json --backfill-out backfill.json
+```
+
+Output (rows `litesvm`, paging and received set `mocked`), exit code 1 because events are missing:
+
+```
+reference 10 (mocked), received 10 (mocked), status any
+missing: 3
+  3ChjaDHLvRPXmj5Z9oRzNT5TMRyoEU1VYkgxNBPyW3FwvAwvDQ2mEX4o7UXNwTjWfxoYQBdbZx7Uo9n8n2Jf6f66 slot=102 failed=false
+  ...
+decoded events from missing txs: 3
+backfill: 3 webhook payloads written to backfill.json
+```
+
+The fixture has 4 pages. Page 2 is empty but carries a token, and page 3 repeats the last row of page 1, as overlapping pages do. The 11 rows read come out as 10, one per signature.
+
+How the paging stays honest:
+
+- The loop stops when a response has no `paginationToken`. An empty page that still has a token does not stop it.
+- The window (`--slot-gte`, `--slot-lte`, `--time-gte`, `--time-lte`) and `--page-limit` go on every page request. Only the token changes.
+- A token that a response returns a second time stops the run with an error. It never loops.
+- `--max-pages` (default 50) caps the loop. Hitting the cap while the server still has more is an error, because a short reference would report false `extra` rows.
+- Errors carry counts and fixed labels only, never a token value or server text.
+- A signature that appears on two pages is kept once.
+
+The backfill is the raw webhook shape: `slot`, `blockTime`, `transaction` and `meta` of each transaction. Helius says raw webhooks "return regular Solana transaction data directly from the blockchain", and a raw webhook includes failed transactions. The tool does not emit the enhanced shape, whose `type`, `source`, `description` and `events` only Helius can compute. Backfill output from the recorded run above is `mocked`. It needs `--refetch-from` or `--live` to get the full transactions. `--backfill-out -` prints the array to stdout and sends the report to stderr.
+
+Failed transactions: with `--status any`, a failed transaction is in the backfill with its `meta.err`, as a raw webhook would send it. Its `Program data:` events are skipped when decoding, because the runtime rolled the transaction back and the event never took effect.
+
 No local cargo? Run it in Docker with `docker run --rm -v "$PWD:/w" -w /w rust:1 cargo run -q -p webhook-reconcile -- diff ...`.
 
 ## Setup
@@ -86,8 +120,11 @@ anchor build --ignore-keys && cd lab && npm ci && npm test
 | Anchor event decode through the IDL, filtered by the invoke stack | passes, litesvm |
 | Loud errors on truncated logs, truncated payloads and signatures-mode input | passes, mocked |
 | Anchor program `event-lab` built and recorded in LiteSVM | passes in CI (`anchor` check) |
-| Paging across a long outage window | not run |
-| Live Helius call, including the `--live` refetch | not run |
+| Paging across a long outage window (token loop guard, page cap, window bounds, empty page) | passes, mocked (recorded pages replayed, no network) |
+| Duplicate reference rows kept once | passes, mocked |
+| Backfill in raw webhook payload shape, replay closes the gap | passes, mocked (litesvm rows) |
+| Events of failed transactions skipped in decode | passes, mocked |
+| Live paging, `--live` refetch and backfill on Jupiter v6 (102 reference rows, slots 466122525 to 466122534, page limit 40). 7 missing and 7 backfill payloads, against the mocked received set from chunk 1, so the 7 are an artifact of the mock | run live (2026-11-06, key never printed), received set mocked |
 | CI | runs on every pull request (`rust` and `anchor` checks) |
 
 ## License
