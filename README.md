@@ -81,9 +81,9 @@ Offline, no key. It prints `test result: ok`, 12 passed for the CLI and 88 passe
 ## Layout
 
 ```
-crates/webhook-reconcile/   # the CLI: diff, paging, refetch, decode, backfill
+crates/webhook-reconcile/   # the CLI: reference, diff, refetch, helius, decode, backfill, report
 programs/event-lab/         # Anchor test program
-lab/                        # LiteSVM recorder for fixtures/
+programs/event-lab/record/  # LiteSVM recorder for fixtures/
 fixtures/                   # recorded Helius responses and test inputs
 ```
 
