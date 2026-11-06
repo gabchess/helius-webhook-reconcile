@@ -1,0 +1,23 @@
+{
+  "note": "expected diff of gtfa-live.json against gtfa-live-received.json. missing_any is the status=any result; missing_succeeded is the default.",
+  "missing_any": [
+    "4eL2wEPQPqwsVpbUK4EfqCfuaXXRsUft83iZzQbBZANCHtqAcvPkVYH8gdrZmKzvW7ph9JrsrQoDFsD8pFiiw3Ph",
+    "5N6a6t1AzakYDiQMVVyKdD1ARDS7SXyL3g4UNZHZ3s4dWYEVW2t89BcGnF1WZayv9WvCdXSMyEbLVVYjAtT2u2d8",
+    "3yAMQTgjEUyatTcPCJFT1oezsfhUG5qke14NPoS7ZEBHR5YAAebAkr71WEbonBFNanAy7pG2g1nYU1ZUZ45NFViF",
+    "64fNCAWt3Ezx7bdK8wsBM61Q18Gz6xK5SZhEuGLkZ8FMXGKf9PxkZAhdPVvCVacG3gnF5A9S4W7AuXW2NcruyLiw",
+    "2SpJCRwDEt8fjXHGfmiL8oYyFF8hRDAV9XF3KUAzcWvopj9v3m2QHbJhZWpkqph5j5t5dV9ps954JJrmaWCTfadJ"
+  ],
+  "missing_succeeded": [
+    "64fNCAWt3Ezx7bdK8wsBM61Q18Gz6xK5SZhEuGLkZ8FMXGKf9PxkZAhdPVvCVacG3gnF5A9S4W7AuXW2NcruyLiw",
+    "2SpJCRwDEt8fjXHGfmiL8oYyFF8hRDAV9XF3KUAzcWvopj9v3m2QHbJhZWpkqph5j5t5dV9ps954JJrmaWCTfadJ"
+  ],
+  "skipped_failed": [
+    "4eL2wEPQPqwsVpbUK4EfqCfuaXXRsUft83iZzQbBZANCHtqAcvPkVYH8gdrZmKzvW7ph9JrsrQoDFsD8pFiiw3Ph",
+    "5N6a6t1AzakYDiQMVVyKdD1ARDS7SXyL3g4UNZHZ3s4dWYEVW2t89BcGnF1WZayv9WvCdXSMyEbLVVYjAtT2u2d8",
+    "3yAMQTgjEUyatTcPCJFT1oezsfhUG5qke14NPoS7ZEBHR5YAAebAkr71WEbonBFNanAy7pG2g1nYU1ZUZ45NFViF"
+  ],
+  "duplicates": [
+    "64GSSkdqb81kjFRxqwrcKGvu3Yooq2XUF9G9y6xTSohpbekxTV2ttmxhZe9FTNTg39B2TC9iuGpBwdybtPrwWCNn",
+    "3mYQiLCc6UMna1en8v6vb3sEyhup2UmosZKK9aegT7BnvSrdGNLWKmYBEi1VDt822yyXCMz6ijJ8A1sGuNNHt3VA"
+  ]
+}
