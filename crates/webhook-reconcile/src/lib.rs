@@ -1,13 +1,8 @@
-//! Diff the signatures a webhook consumer received against a Helius reference set, refetch only the
-//! missing transactions in full mode, decode their Anchor events through the IDL, and shape them as
-//! webhook payloads for replay.
-//! The diff, the decoder and the payload shaping do no network I/O. The refetch sits behind the
-//! `TxSource` trait and the paged reference read behind `ReferenceSource`.
+//! Diff received signatures against a Helius reference set, refetch the missing ones, decode their Anchor events.
 pub mod backfill;
 pub mod decode;
 pub mod paging;
 pub mod refetch;
-pub mod triage;
 pub mod types;
 
 pub use backfill::webhook_payload;

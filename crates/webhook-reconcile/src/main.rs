@@ -1,19 +1,17 @@
-//! webhook-reconcile diff --received <json> (--reference <json> | --reference-pages <json> | --live-reference --address <pubkey>)
-//!   [--slot-gte N --slot-lte N --time-gte N --time-lte N --page-limit N --max-pages N]
-//!   [--status succeeded|failed|any] [--json] [--received-tag <tag>] [--reference-tag <tag>]
-//!   [--idl <json>] [--refetch-from <json> | --live] [--backfill-out <path|->]
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::{fs, path::PathBuf, process::ExitCode};
-use webhook_reconcile::triage::KNOWN_TAGS;
 use webhook_reconcile::types::{RefEntry, ReferenceSet, Status};
 use webhook_reconcile::{
     decode_missing, diff, fetch_reference, parse_received, parse_reference, raw_for_missing,
     refetch_missing, webhook_payload, with_logs_from_raw, HeliusRpc, Idl, RecordedPages,
     RecordedSource, ReferenceSource, TxSource, Window,
 };
+
+/// The provenance tags a diff report may carry. Any other value, or none, is unknown provenance.
+const KNOWN_TAGS: [&str; 3] = ["run live", "mocked", "litesvm"];
 
 #[derive(Debug, Parser)]
 #[command(
