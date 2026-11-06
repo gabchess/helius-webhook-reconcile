@@ -124,7 +124,7 @@ anchor build --ignore-keys && cd lab && npm ci && npm test
 | Duplicate reference rows kept once | passes, mocked |
 | Backfill in raw webhook payload shape, replay closes the gap | passes, mocked (litesvm rows) |
 | Events of failed transactions skipped in decode | passes, mocked |
-| Live paging, `--live` refetch and backfill on Jupiter v6 (102 rows, slots 466122525 to 466122534, page limit 40) | run live (2026-11-06, key never printed) |
+| Live paging, `--live` refetch and backfill on Jupiter v6 (102 reference rows, slots 466122525 to 466122534, page limit 40). 7 missing and 7 backfill payloads, against the mocked received set from chunk 1, so the 7 are an artifact of the mock | run live (2026-11-06, key never printed), received set mocked |
 | CI | runs on every pull request (`rust` and `anchor` checks) |
 
 ## License
