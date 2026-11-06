@@ -1,4 +1,4 @@
-# Live paging, refetch and backfill on Jupiter v6, recorded 2026-11-06 in chunk 5
+# Live paging, refetch and backfill on Jupiter v6, recorded 2026-11-06
 # Tags: reference run live (getTransactionsForAddress paged on Helius, page limit 40), refetch run live (getTransaction on Helius), received mocked (fixtures/gtfa-live-received.json)
 # The received set is the mocked file, so the 7 missing rows are an artifact of the mock, not a loss on any real webhook.
 # Command: ( set -a; . ~/.secrets/helius.env; set +a; docker run --rm -e HELIUS_API_KEY -v <repo>:/w -w /w rust:1 sh -c 'cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --live-reference --address JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 --slot-gte 466122525 --slot-lte 466122534 --page-limit 40 --status any --live --backfill-out /tmp/b.json' )
