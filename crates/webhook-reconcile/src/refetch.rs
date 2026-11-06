@@ -149,7 +149,8 @@ impl TxSource for RecordedSource {
 }
 
 /// Live Helius JSON-RPC source. It sends `getTransaction` in batches. The API key lives only in
-/// the request URL held in memory. Debug output and error text never contain it.
+/// the request URL held in memory. Debug output never contains it, and every error leaves
+/// `fetch_full` through `redact`, the one place that removes the key and the URL.
 pub struct HeliusRpc {
     url: String,
     key: String,
@@ -176,34 +177,27 @@ impl HeliusRpc {
     }
 
     fn redact(&self, text: &str) -> String {
-        text.replace(&self.key, "<redacted>")
+        text.replace(&self.url, "<redacted-url>")
+            .replace(&self.key, "<redacted>")
     }
 
     fn post(&self, body: &Value) -> Result<Value> {
         let resp = ureq::post(&self.url)
             .timeout(Duration::from_secs(30))
             .send_json(body.clone())
-            // ureq error text can hold the request URL, so keep only the status or the kind
             .map_err(|e| match e {
-                ureq::Error::Status(code, _) => anyhow!("Helius RPC returned HTTP {code}"),
-                ureq::Error::Transport(t) => anyhow!("Helius RPC transport error: {:?}", t.kind()),
+                ureq::Error::Status(code, resp) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    let body: String = body.chars().take(200).collect();
+                    anyhow!("Helius RPC returned HTTP {code}: {body}")
+                }
+                ureq::Error::Transport(t) => anyhow!("Helius RPC transport error: {t}"),
             })?;
         resp.into_json::<Value>()
-            .map_err(|e| anyhow!("{}", self.redact(&e.to_string())))
             .context("read Helius RPC response")
     }
-}
 
-impl fmt::Debug for HeliusRpc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HeliusRpc")
-            .field("key", &"<redacted>")
-            .finish()
-    }
-}
-
-impl TxSource for HeliusRpc {
-    fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
+    fn fetch_batches(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
         let mut out = Vec::new();
         for chunk in signatures.chunks(BATCH_SIZE) {
             let body: Vec<Value> = chunk
@@ -219,5 +213,20 @@ impl TxSource for HeliusRpc {
             out.extend(parse_batch_response(chunk, &resp)?);
         }
         Ok(out)
+    }
+}
+
+impl fmt::Debug for HeliusRpc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeliusRpc")
+            .field("key", &"<redacted>")
+            .finish()
+    }
+}
+
+impl TxSource for HeliusRpc {
+    fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
+        self.fetch_batches(signatures)
+            .map_err(|e| anyhow!("{}", self.redact(&format!("{e:#}"))))
     }
 }

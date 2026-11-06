@@ -319,6 +319,65 @@ fn transport_error_text_never_contains_the_key() {
     assert!(!text.contains("api-key"), "key parameter leaked: {text}");
 }
 
+fn serve_once(status_line: &'static str, body: &'static str) -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut length = 0usize;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = v.trim().parse().unwrap();
+            }
+        }
+        let mut request_body = vec![0u8; length];
+        reader.read_exact(&mut request_body).unwrap();
+        let reply = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(reply.as_bytes()).unwrap();
+    });
+    format!("http://{addr}")
+}
+
+fn assert_key_absent(err: &anyhow::Error) {
+    let text = format!("{err:#} {err:?}");
+    assert!(!text.contains("SECRET-KEY-123"), "key leaked: {text}");
+    assert!(!text.contains("api-key="), "key parameter leaked: {text}");
+}
+
+#[test]
+fn jsonrpc_error_text_never_contains_the_key() {
+    let base = serve_once(
+        "200 OK",
+        r#"[{"jsonrpc":"2.0","id":"0","error":{"code":-32602,"message":"invalid api-key SECRET-KEY-123"}}]"#,
+    );
+    let err = HeliusRpc::new(&base, "SECRET-KEY-123")
+        .fetch_full(&[sig("a")])
+        .unwrap_err();
+    assert_key_absent(&err);
+}
+
+#[test]
+fn status_error_text_never_contains_the_key() {
+    let base = serve_once(
+        "401 Unauthorized",
+        r#"{"error":"invalid api-key SECRET-KEY-123"}"#,
+    );
+    let err = HeliusRpc::new(&base, "SECRET-KEY-123")
+        .fetch_full(&[sig("a")])
+        .unwrap_err();
+    assert_key_absent(&err);
+}
+
 struct AnswersWith(Vec<RefEntry>);
 
 impl TxSource for AnswersWith {
