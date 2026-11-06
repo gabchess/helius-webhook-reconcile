@@ -1,0 +1,13 @@
+# cargo test, recorded 2026-11-06 in chunk 5 on branch claude/chunk-5-readme-pitch, after the default-run fix in crates/webhook-reconcile/Cargo.toml
+# Command: docker run --rm -v <repo>:/w -w /w rust:1 cargo test -p webhook-reconcile --locked
+     Running unittests src/lib.rs (target/debug/deps/webhook_reconcile-6305df1b4e5a81d8)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/bin/helius-triage.rs (target/debug/deps/helius_triage-42e9b4add2cb26db)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/main.rs (target/debug/deps/webhook_reconcile-9774735efe0cd9d4)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/offline.rs (target/debug/deps/offline-b7e4f8d000fa443e)
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/triage.rs (target/debug/deps/triage-7003c5ce45d5a17b)
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
