@@ -32,15 +32,15 @@ extra (received, not in reference): 0
 
 The reference holds 5 never-received rows, and 3 of them failed on chain. Enhanced webhooks do not send failed transactions, so `--status succeeded` (the default) leaves them out and counts them on the "not counted" line. `--status any` lists all 5. The mocked received set includes failed transactions on purpose, to exercise the filter.
 
-No local cargo? Run the same command in Docker with `docker run --rm -v "$PWD:/w" -w /w rust:1 cargo run -q -p webhook-reconcile -- diff ...`.
+No local cargo? Run the same command in Docker with `docker run --rm -v "$PWD:/w" -w /w rust:1 cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json`.
 
 ## Problem
 
-The Helius webhooks FAQ (https://www.helius.dev/docs/faqs/webhooks, read 2026-11-06) says: "If all retry attempts fail, the event is permanently lost". A consumer whose endpoint was down gets no list of what it missed.
+The Helius webhooks FAQ (https://www.helius.dev/docs/faqs/webhooks, read 2026-11-06) says: "If all retry attempts fail, the event is permanently lost". This tool works the step after that. It names the missing signatures from getTransactionsForAddress and writes them as webhook payloads to replay.
 
-Teams build their own reconcile step for this. A pull request in another project, https://github.com/wessteven/buyguy-free-crawler/pull/74 (opened 2026-11-04, not a Helius ticket), plans to "Reconcile `wallet+signature` with original webhook data" after what it calls "the 2026-11-01 05:20 UTC to 2026-11-03 08:55 UTC webhook outage". The PR does not say whether the outage was on the Helius side.
+At least one team built its own reconcile step for this. A pull request in another project, https://github.com/wessteven/buyguy-free-crawler/pull/74 (opened 2026-11-04, not a Helius ticket), plans to "Reconcile `wallet+signature` with original webhook data" after what it calls "the 2026-11-01 05:20 UTC to 2026-11-03 08:55 UTC webhook outage". The PR does not say whether the outage was on the Helius side.
 
-Helius already ships the pieces around the gap, and this tool does not repeat them. The core-ai skill file [webhooks.md](https://github.com/helius-labs/core-ai/blob/main/.agents/skills/helius/references/webhooks.md) tells developers to "Deduplicate by signature" and has no replay or backfill text. [helius-cli](https://github.com/helius-labs/core-ai/tree/main/helius-cli) lists, creates, updates and deletes webhooks. The FAQ offers "customizable retry policies for enterprise plans". None of them lists the events an endpoint never acknowledged.
+Helius already ships the pieces around the gap. The core-ai skill file [webhooks.md](https://github.com/helius-labs/core-ai/blob/main/.agents/skills/helius/references/webhooks.md) tells developers to "Deduplicate by signature" and has no replay or backfill text. [helius-cli](https://github.com/helius-labs/core-ai/tree/main/helius-cli) lists, creates, updates and deletes webhooks. The FAQ offers "customizable retry policies for enterprise plans". The same FAQ answer says: "Monitor your webhook logs in the [Helius Dashboard](https://dashboard.helius.dev/webhooks) to identify delivery failures and investigate endpoint issues." This tool does not replace any of them. It adds three steps after the logs: a signature-level diff against getTransactionsForAddress, a refetch of only the missing signatures, and a webhook-shaped backfill to replay.
 
 ## How I would handle this as your Solutions Engineer
 
@@ -48,13 +48,13 @@ The job post (https://jobs.ashbyhq.com/helius/e98b2c54-2baa-4bc5-8bd8-eb5b1b35b9
 
 1. Report. A developer writes in that their webhook stopped. The PR above is a real case of it, from another project. The recorded ticket is `fixtures/triage-ticket-webhook-stopped.txt` (mocked).
 2. Triage. The quick start command prints the signatures that the reference has and the received set lacks. Code: `crates/webhook-reconcile/src/main.rs` and `src/lib.rs`. The received set is mocked.
-3. Reproduce. `fixtures/gtfa-live.json` is a recorded Helius reference (run live), so the same gap shows on any machine with no key. On Helius itself, the live run in [docs/run-log/2026-11-06-live-jupiter-v6.txt](docs/run-log/2026-11-06-live-jupiter-v6.txt) paged 102 reference rows for Jupiter v6 (run live) and found 7 missing. The 7 are missing from the mocked received set, so they are an artifact of the mock and not a loss.
-4. Backfill. `--backfill-out backfill.json` writes the missing transactions as raw webhook payloads, oldest slot first, ready to replay into the endpoint. Proof: `backfill_has_the_raw_webhook_shape_and_replays_the_gap` in `tests/offline.rs` (mocked, rows from litesvm). The live run above wrote 7 payloads (run live refetch, mocked received set).
+3. Reproduce. `fixtures/gtfa-live.json` is a recorded Helius reference (run live), so the same gap shows on any machine with no key. On Helius itself, the live run in [docs/run-log/2026-11-06-live-jupiter-v6.txt](docs/run-log/2026-11-06-live-jupiter-v6.txt) paged 102 reference rows for Jupiter v6 (run live) and found 7 missing against the mocked received set, so the 7 are an artifact of the mock and not a loss.
+4. Backfill. `--backfill-out backfill.json`, with `--refetch-from` or `--live`, writes the missing transactions as raw webhook payloads, oldest slot first, ready to replay into the endpoint. Proof: `backfill_has_the_raw_webhook_shape_and_replays_the_gap` in `tests/offline.rs` (mocked, rows from litesvm). The live run above wrote 7 payloads (run live refetch, mocked received set).
 5. Reply. `skills/helius-triage/SKILL.md` takes the ticket and the diff report to a drafted reply that a person reviews before it goes out. Run the quick start diff again with `--json > report.json`, then `cargo run -q -p webhook-reconcile --bin helius-triage -- --ticket fixtures/triage-ticket-webhook-stopped.txt --report report.json`. The recorded draft is in [docs/run-log/2026-11-06-triage-offline.txt](docs/run-log/2026-11-06-triage-offline.txt).
 
 Two guarantees hold for the draft, and tests in `tests/triage.rs` pin both.
 
-- With `--ai`, the model sees only words from a fixed 104-word list (`JEV_WORDS` in `src/triage.rs`).
+- With `--ai`, the only ticket text the model receives is the ticket's words that are in a fixed 104-word list (`JEV_WORDS` in `src/triage.rs`).
 - The draft never claims a loss unless both data tags are `run live`.
 
 The job post also asks to "Automate support workflows using internal tooling, scripts and AI-assisted systems". This is that, with Rust, Anchor and the Helius APIs as the evidence.
@@ -146,7 +146,7 @@ AGENTS.md                                      # rules for agents that change th
 
 - It never sends a transaction. The source has no `sendTransaction` call and loads no keypair.
 - It does not post the backfill or the reply anywhere. It writes files and prints text. Its only network calls go to the Helius RPC and, with `--ai`, to Jev.
-- It does not produce the enhanced webhook shape, whose `type`, `source`, `description` and `events` only Helius can compute.
+- It does not produce the enhanced webhook shape, whose `type`, `source`, `description` and `events` fields Helius computes.
 
 ## License
 
