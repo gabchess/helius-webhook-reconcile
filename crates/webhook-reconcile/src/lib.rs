@@ -37,6 +37,7 @@ fn tag_of(v: &Value) -> Option<String> {
     v.get("tag").and_then(Value::as_str).map(String::from)
 }
 
+/// Parse a saved Helius reference file into signatures, slots and a `failed` flag per row.
 pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
     let rows = find_rows(v).ok_or_else(|| anyhow!("no array of rows found in reference file"))?;
     let mut entries = Vec::new();
@@ -60,6 +61,7 @@ pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
     })
 }
 
+/// Parse a saved set of received webhook payloads into the signatures the consumer saw.
 pub fn parse_received(v: &Value) -> Result<ReceivedSet> {
     let rows =
         find_rows(v).ok_or_else(|| anyhow!("no array of payloads found in received file"))?;

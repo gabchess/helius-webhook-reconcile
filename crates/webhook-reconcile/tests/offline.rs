@@ -88,7 +88,7 @@ fn live_reference_contains_failed_txs() {
 }
 
 #[test]
-fn full_mode_reference_reads_signature_and_err_from_transaction_and_meta() {
+fn full_mode_reference_reads_signature_from_transaction() {
     let reference = parse_reference(&fx("event-lab-reference.json")).unwrap();
     let received = parse_received(&fx("event-lab-received.json")).unwrap();
     assert_eq!(reference.tag.as_deref(), Some("litesvm"));
@@ -96,6 +96,24 @@ fn full_mode_reference_reads_signature_and_err_from_transaction_and_meta() {
     assert_eq!(report.missing.len(), 3);
     assert_eq!(report.duplicates.len(), 2);
     assert_eq!(report.extra.len(), 1);
+}
+
+#[test]
+fn full_mode_failed_tx_is_read_from_meta_err() {
+    let reference = parse_reference(&json!([
+        {"transaction": {"signatures": ["bad"]}, "meta": {"err": {"InstructionError": [0, "Custom"]}}},
+        {"transaction": {"signatures": ["ok"]}, "meta": {"err": null}}
+    ]))
+    .unwrap();
+    let received = parse_received(&json!([])).unwrap();
+
+    let default = diff(&reference, &received, Status::default());
+    assert_eq!(names(&default.missing), vec!["ok"]);
+    assert_eq!(names(&default.skipped_by_status), vec!["bad"]);
+
+    let any = diff(&reference, &received, Status::Any);
+    assert_eq!(names(&any.missing), vec!["bad", "ok"]);
+    assert!(any.skipped_by_status.is_empty());
 }
 
 #[test]

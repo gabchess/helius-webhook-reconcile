@@ -42,6 +42,7 @@ pub enum Status {
 }
 
 impl Status {
+    /// True when a reference row with this failure state is counted under the chosen status.
     pub fn admits(self, failed: bool) -> bool {
         match self {
             Status::Succeeded => !failed,

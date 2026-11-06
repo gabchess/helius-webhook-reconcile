@@ -32,6 +32,8 @@ extra (received, not in reference): 0
 
 The reference holds 5 never-received rows. 3 of them are failed transactions. Enhanced webhooks do not send failed transactions, so they are not a lost webhook, and `--status succeeded` (the default) leaves them out and counts them in the "not counted" line. `--status any` lists all 5. `--status failed` lists only the failed ones. The three values match `filters.status` of getTransactionsForAddress.
 
+The mocked `fixtures/gtfa-live-received.json` includes failed transactions on purpose, to exercise the filter. Real enhanced webhooks never send failed transactions.
+
 No local cargo? Run it in Docker with `docker run --rm -v "$PWD:/w" -w /w rust:1 cargo run -q -p webhook-reconcile -- diff ...`.
 
 ## Setup
