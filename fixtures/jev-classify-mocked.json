@@ -1,0 +1,129 @@
+{
+  "tag": "mocked",
+  "note": "Hand-built from the response shape documented at docs.typesafe.ai/api-reference (snapshot 2026-09-25). No Jev call was made. The answers, probabilities and confidences are invented to exercise the code paths. The live Jev path is not run.",
+  "exchanges": [
+    {
+      "ticket_file": "triage-ticket-webhook-stopped.txt",
+      "request": {
+        "state": {
+          "ticket": {
+            "text": "My webhook stopped. Since about 14:00 UTC yesterday my endpoint receives no events for the wallet I registered. Did Helius drop them?\n"
+          }
+        },
+        "model": "jev-1.13.0",
+        "questions": {
+          "kind": {
+            "type": "choice",
+            "instructions": "Which kind of support request is the text in `ticket.text`?",
+            "criteria": {
+              "webhook_stopped": {
+                "what": "The customer says a Helius webhook stopped delivering events or missed events.",
+                "not_for": "Billing, plan, API key or code questions that only mention webhooks."
+              },
+              "other": {
+                "what": "Any other support request.",
+                "not_for": "A webhook that stopped delivering or missed events."
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "kind": {
+            "type": "choice",
+            "choice": "webhook_stopped",
+            "confidence": 0.94,
+            "probabilities": {
+              "webhook_stopped": 0.97,
+              "other": 0.03
+            }
+          }
+        }
+      }
+    },
+    {
+      "ticket_file": "triage-ticket-billing.txt",
+      "request": {
+        "state": {
+          "ticket": {
+            "text": "How do I upgrade my plan? I need more credits for my API key before Friday.\n"
+          }
+        },
+        "model": "jev-1.13.0",
+        "questions": {
+          "kind": {
+            "type": "choice",
+            "instructions": "Which kind of support request is the text in `ticket.text`?",
+            "criteria": {
+              "webhook_stopped": {
+                "what": "The customer says a Helius webhook stopped delivering events or missed events.",
+                "not_for": "Billing, plan, API key or code questions that only mention webhooks."
+              },
+              "other": {
+                "what": "Any other support request.",
+                "not_for": "A webhook that stopped delivering or missed events."
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "kind": {
+            "type": "choice",
+            "choice": "other",
+            "confidence": 0.92,
+            "probabilities": {
+              "webhook_stopped": 0.04,
+              "other": 0.96
+            }
+          }
+        }
+      }
+    },
+    {
+      "ticket_file": "triage-ticket-vague.txt",
+      "request": {
+        "state": {
+          "ticket": {
+            "text": "Something is off with my integration. We see fewer transfers than we expected last week.\n"
+          }
+        },
+        "model": "jev-1.13.0",
+        "questions": {
+          "kind": {
+            "type": "choice",
+            "instructions": "Which kind of support request is the text in `ticket.text`?",
+            "criteria": {
+              "webhook_stopped": {
+                "what": "The customer says a Helius webhook stopped delivering events or missed events.",
+                "not_for": "Billing, plan, API key or code questions that only mention webhooks."
+              },
+              "other": {
+                "what": "Any other support request.",
+                "not_for": "A webhook that stopped delivering or missed events."
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "kind": {
+            "type": "choice",
+            "choice": "webhook_stopped",
+            "confidence": 0.1,
+            "probabilities": {
+              "webhook_stopped": 0.55,
+              "other": 0.45
+            }
+          }
+        }
+      }
+    }
+  ]
+}
