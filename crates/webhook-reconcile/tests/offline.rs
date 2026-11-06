@@ -4,11 +4,14 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 use webhook_reconcile::decode::event_discriminator;
+use webhook_reconcile::paging::{page_request_body, parse_page_response};
 use webhook_reconcile::refetch::{parse_batch_response, TxSource};
 use webhook_reconcile::types::{RefEntry, Signature};
 use webhook_reconcile::{
-    decode_missing, diff, parse_received, parse_reference, program_data_lines, refetch_missing,
-    types::Status, DecodeError, HeliusRpc, Idl, RecordedSource, RpcError,
+    decode_missing, diff, fetch_reference, parse_received, parse_reference, program_data_lines,
+    raw_for_missing, refetch_missing, types::Status, webhook_payload, DecodeError, HeliusRpc, Idl,
+    PageRequest, PageToken, PagingError, RecordedPages, RecordedSource, ReferenceSource, RpcError,
+    Window,
 };
 
 fn fx(name: &str) -> Value {
@@ -445,6 +448,14 @@ fn rpc_error_display_is_exact_for_every_variant() {
             },
             "Helius RPC response: body is not valid JSON",
         ),
+        (
+            RpcError::JsonRpcMethod { code: Some(-32602) },
+            "getTransactionsForAddress failed with code -32602",
+        ),
+        (
+            RpcError::JsonRpcMethod { code: None },
+            "getTransactionsForAddress failed with no code",
+        ),
     ];
     for (err, text) in cases {
         assert_eq!(err.to_string(), text);
@@ -635,4 +646,553 @@ fn a_discriminator_that_differs_in_the_last_byte_is_not_an_event() {
     let mut raw = base64_decode(&recorded_payload(2));
     raw[7] ^= 0xff;
     assert!(idl().decode(&sig("x"), &base64_of(&raw)).unwrap().is_none());
+}
+
+fn pages_fixture() -> RecordedPages {
+    RecordedPages::from_json(&fx("event-lab-pages.json")).unwrap()
+}
+
+fn window() -> Window {
+    Window {
+        slot_gte: Some(100),
+        slot_lte: Some(109),
+        time_gte: Some(1_700_000_000),
+        time_lte: None,
+    }
+}
+
+fn read_pages(source: &dyn ReferenceSource, max_pages: usize) -> anyhow::Result<Vec<RefEntry>> {
+    fetch_reference(source, "addr", &window(), 4, max_pages)
+}
+
+fn row(signature: &str) -> Value {
+    json!({"signature": signature, "slot": 1, "err": null})
+}
+
+fn recorded(pages: Value) -> RecordedPages {
+    RecordedPages::from_json(&json!({ "pages": pages })).unwrap()
+}
+
+#[test]
+fn paging_follows_the_token_chain_over_the_whole_window() {
+    let source = pages_fixture();
+    let entries = read_pages(&source, 10).unwrap();
+    let tokens: Vec<Option<String>> = source
+        .requests()
+        .iter()
+        .map(|r| r.token.as_ref().map(|t| t.as_str().to_string()))
+        .collect();
+    assert_eq!(
+        tokens,
+        [
+            None,
+            Some("104:0".to_string()),
+            Some("105:0".to_string()),
+            Some("108:0".to_string())
+        ]
+    );
+    let all = parse_reference(&fx("event-lab-signatures.json")).unwrap();
+    assert_eq!(names(&entries), names(&all.entries));
+}
+
+#[test]
+fn paging_stops_when_the_token_is_absent() {
+    for last in [
+        json!({"data": [row("a")]}),
+        json!({"data": [row("a")], "paginationToken": null}),
+    ] {
+        let source = recorded(json!([{"after": null, "result": last}]));
+        let entries = read_pages(&source, 10).unwrap();
+        assert_eq!(names(&entries), ["a"]);
+        assert_eq!(source.requests().len(), 1, "no request after the last page");
+    }
+}
+
+#[test]
+fn paging_keeps_the_window_on_every_page() {
+    let source = pages_fixture();
+    read_pages(&source, 10).unwrap();
+    let requests = source.requests();
+    assert_eq!(requests.len(), 4);
+    for req in &requests {
+        assert_eq!(req.window, window());
+        assert_eq!(req.address, "addr");
+        assert_eq!(req.limit, 4);
+        let body = page_request_body(req);
+        let filters = &body["params"][1]["filters"];
+        assert_eq!(filters["slot"], json!({"gte": 100, "lte": 109}));
+        assert_eq!(filters["blockTime"], json!({"gte": 1_700_000_000u64}));
+        assert_eq!(filters["status"], "any");
+    }
+}
+
+#[test]
+fn page_request_body_is_exact() {
+    let first = PageRequest {
+        address: "addr".into(),
+        window: window(),
+        limit: 4,
+        token: None,
+    };
+    assert_eq!(
+        page_request_body(&first),
+        json!({"jsonrpc": "2.0", "id": "1", "method": "getTransactionsForAddress",
+               "params": ["addr", {"transactionDetails": "signatures", "sortOrder": "asc",
+                                   "commitment": "finalized", "limit": 4,
+                                   "filters": {"status": "any",
+                                               "slot": {"gte": 100, "lte": 109},
+                                               "blockTime": {"gte": 1_700_000_000u64}}}]})
+    );
+    let next = PageRequest {
+        window: Window::default(),
+        token: Some(PageToken::new("104:0")),
+        ..first
+    };
+    let body = page_request_body(&next);
+    assert_eq!(body["params"][1]["paginationToken"], "104:0");
+    assert_eq!(body["params"][1]["filters"], json!({"status": "any"}));
+}
+
+#[test]
+fn an_empty_page_without_a_token_ends_the_read() {
+    let source =
+        recorded(json!([{"after": null, "result": {"data": [], "paginationToken": null}}]));
+    assert!(read_pages(&source, 10).unwrap().is_empty());
+    assert_eq!(source.requests().len(), 1);
+}
+
+#[test]
+fn an_empty_page_with_a_token_does_not_end_the_read() {
+    let source = pages_fixture();
+    let entries = read_pages(&source, 10).unwrap();
+    assert_eq!(entries.len(), 10, "rows after the empty page 2 were read");
+    assert_eq!(source.requests().len(), 4);
+}
+
+#[test]
+fn a_repeated_token_is_a_loud_error_not_a_loop() {
+    let source = recorded(json!([
+        {"after": null, "result": {"data": [row("a")], "paginationToken": "9999:7"}},
+        {"after": "9999:7", "result": {"data": [row("a")], "paginationToken": "9999:7"}},
+    ]));
+    let err = read_pages(&source, 1000).unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<PagingError>(),
+        Some(&PagingError::TokenRepeated { page: 2 })
+    );
+    assert_eq!(source.requests().len(), 2, "stopped at the repeat");
+    let text = format!("{err:#} {err:?}");
+    assert!(!text.contains("9999:7"), "token leaked: {text}");
+}
+
+#[test]
+fn a_token_cycle_is_caught_too() {
+    let source = recorded(json!([
+        {"after": null, "result": {"data": [], "paginationToken": "1:0"}},
+        {"after": "1:0", "result": {"data": [], "paginationToken": "2:0"}},
+        {"after": "2:0", "result": {"data": [], "paginationToken": "1:0"}},
+    ]));
+    let err = read_pages(&source, 1000).unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<PagingError>(),
+        Some(&PagingError::TokenRepeated { page: 3 })
+    );
+    assert_eq!(source.requests().len(), 3);
+}
+
+#[test]
+fn the_page_cap_stops_a_long_read_with_an_error() {
+    let source = pages_fixture();
+    let err = read_pages(&source, 2).unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<PagingError>(),
+        Some(&PagingError::PageCapReached { max_pages: 2 })
+    );
+    assert_eq!(source.requests().len(), 2);
+    assert!(err.to_string().contains("--max-pages"), "{err}");
+}
+
+#[test]
+fn a_cap_equal_to_the_page_count_is_not_an_error() {
+    let source = pages_fixture();
+    assert_eq!(read_pages(&source, 4).unwrap().len(), 10);
+    assert!(read_pages(&pages_fixture(), 3).is_err());
+}
+
+#[test]
+fn a_page_token_never_shows_in_debug_output() {
+    let t = PageToken::new("9999:7");
+    assert!(!format!("{t:?}").contains("9999"));
+}
+
+#[test]
+fn a_signature_repeated_across_pages_is_kept_once() {
+    let source = recorded(json!([
+        {"after": null, "result": {"data": [row("a"), row("dup")], "paginationToken": "1:0"}},
+        {"after": "1:0", "result": {"data": [row("dup"), row("b")], "paginationToken": null}},
+    ]));
+    let entries = read_pages(&source, 10).unwrap();
+    assert_eq!(names(&entries), ["a", "dup", "b"]);
+
+    let received = parse_received(&json!(["a"])).unwrap();
+    let reference = webhook_reconcile::types::ReferenceSet { tag: None, entries };
+    let report = diff(&reference, &received, Status::Any);
+    assert_eq!(names(&report.missing), ["dup", "b"]);
+
+    let full = |s: &str| json!({"slot": 1, "transaction": {"signatures": [s]}, "meta": {"err": null, "logMessages": []}});
+    let refetch =
+        RecordedSource::from_json(&json!({"responses": {"dup": full("dup"), "b": full("b")}}))
+            .unwrap();
+    let filled = refetch_missing(&report.missing, &refetch).unwrap();
+    assert_eq!(names(&filled), ["dup", "b"]);
+}
+
+#[test]
+fn a_signature_repeated_in_a_saved_reference_is_kept_once() {
+    let reference = parse_reference(&json!([row("dup"), row("dup"), row("b")])).unwrap();
+    assert_eq!(names(&reference.entries), ["dup", "b"]);
+    let report = diff(
+        &reference,
+        &parse_received(&json!([])).unwrap(),
+        Status::Any,
+    );
+    assert_eq!(names(&report.missing), ["dup", "b"]);
+}
+
+#[test]
+fn page_responses_parse_and_fail_without_echoing_the_server() {
+    let ok =
+        parse_page_response(&json!({"result": {"data": [row("a")], "paginationToken": "104:0"}}))
+            .unwrap();
+    assert_eq!(ok.rows.len(), 1);
+    assert_eq!(ok.next, Some(PageToken::new("104:0")));
+
+    let err = parse_page_response(
+        &json!({"error": {"code": -32602, "message": "invalid api-key SECRET-KEY-123"}}),
+    )
+    .unwrap_err();
+    assert_eq!(err, RpcError::JsonRpcMethod { code: Some(-32602) });
+    assert!(!err.to_string().contains("SECRET-KEY-123"));
+
+    for bad in [
+        json!({}),
+        json!({"result": {}}),
+        json!({"result": {"data": [], "paginationToken": 5}}),
+    ] {
+        assert!(
+            matches!(parse_page_response(&bad), Err(RpcError::Decode { .. })),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn live_page_fetch_reads_a_page_and_never_leaks_the_key_or_token() {
+    let base = serve_once(
+        "200 OK",
+        r#"{"jsonrpc":"2.0","id":"1","result":{"data":[{"signature":"a","slot":1,"err":null}],"paginationToken":"104:0"}}"#,
+    );
+    let req = PageRequest {
+        address: "addr".into(),
+        window: window(),
+        limit: 4,
+        token: None,
+    };
+    let page = HeliusRpc::new(&base, "SECRET-KEY-123")
+        .fetch_page(&req)
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.next, Some(PageToken::new("104:0")));
+
+    let base = serve_once(
+        "200 OK",
+        r#"{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"invalid api-key SECRET-KEY-123 token 9999:7"}}"#,
+    );
+    let err = HeliusRpc::new(&base, "SECRET-KEY-123")
+        .fetch_page(&req)
+        .unwrap_err();
+    assert_key_absent(&err);
+    assert!(!format!("{err:#}").contains("9999:7"));
+    assert_eq!(
+        err.downcast_ref::<RpcError>(),
+        Some(&RpcError::JsonRpcMethod { code: Some(-32602) })
+    );
+
+    let err = HeliusRpc::new("http://127.0.0.1:1", "SECRET-KEY-123")
+        .fetch_page(&req)
+        .unwrap_err();
+    assert_key_absent(&err);
+}
+
+fn failed_event_logs(failed: bool) -> RefEntry {
+    RefEntry {
+        signature: sig("f"),
+        slot: Some(1),
+        failed,
+        logs: Some(vec![
+            format!("Program {PROGRAM} invoke [1]"),
+            format!("Program data: {}", recorded_payload(0)),
+            format!("Program {PROGRAM} failed: custom program error: 0x1"),
+        ]),
+    }
+}
+
+#[test]
+fn events_of_a_failed_transaction_are_not_decoded() {
+    assert!(decode_missing(&idl(), &[failed_event_logs(true)])
+        .unwrap()
+        .is_empty());
+    let kept = decode_missing(&idl(), &[failed_event_logs(false)]).unwrap();
+    assert_eq!(kept.len(), 1, "the same logs decode when the tx succeeded");
+}
+
+#[test]
+fn a_failed_transaction_is_skipped_but_its_neighbours_still_decode() {
+    let mut ok = failed_event_logs(false);
+    ok.signature = sig("ok");
+    let events = decode_missing(&idl(), &[failed_event_logs(true), ok]).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].signature.0, "ok");
+}
+
+fn full_tx(signature: &str, slot: u64, err: Value) -> Value {
+    json!({"slot": slot, "blockTime": 1_700_000_000u64 + slot,
+           "transaction": {"signatures": [signature], "message": {}},
+           "meta": {"err": err, "fee": 5000, "logMessages": []}})
+}
+
+#[test]
+fn backfill_has_the_raw_webhook_shape_and_replays_the_gap() {
+    let reference = parse_reference(&fx("event-lab-signatures.json")).unwrap();
+    let received_file = fx("event-lab-received.json");
+    let received = parse_received(&received_file).unwrap();
+    let report = diff(&reference, &received, Status::Any);
+    let source = RecordedSource::from_json(&fx("event-lab-refetch.json")).unwrap();
+
+    let raws = raw_for_missing(&report.missing, &source).unwrap();
+    assert_eq!(source.calls().len(), 1, "one call for all missing rows");
+    let payload = webhook_payload(&raws).unwrap();
+
+    assert_eq!(payload.len(), 3);
+    for p in &payload {
+        let keys: Vec<&str> = p.as_object().unwrap().keys().map(String::as_str).collect();
+        assert!(
+            keys.iter()
+                .all(|k| ["slot", "blockTime", "transaction", "meta", "version"].contains(k)),
+            "unexpected key in {keys:?}"
+        );
+        for k in ["slot", "blockTime", "transaction", "meta"] {
+            assert!(p.get(k).is_some(), "missing {k}");
+        }
+        assert!(p.get("type").is_none() && p.get("description").is_none());
+    }
+    let slots: Vec<u64> = payload
+        .iter()
+        .map(|p| p["slot"].as_u64().unwrap())
+        .collect();
+    assert!(
+        slots.windows(2).all(|w| w[0] <= w[1]),
+        "not oldest first: {slots:?}"
+    );
+
+    let mut all = received_file["payloads"].as_array().unwrap().clone();
+    all.extend(payload);
+    let replayed = parse_received(&Value::Array(all)).unwrap();
+    let after = diff(&reference, &replayed, Status::Any);
+    assert!(
+        after.missing.is_empty(),
+        "the replay left a gap: {:?}",
+        names(&after.missing)
+    );
+}
+
+#[test]
+fn backfill_is_ordered_oldest_slot_first_and_stable() {
+    let rows = [
+        full_tx("s5", 5, Value::Null),
+        full_tx("s3a", 3, Value::Null),
+        full_tx("s3b", 3, Value::Null),
+        full_tx("s4", 4, Value::Null),
+    ];
+    let payload = webhook_payload(&rows).unwrap();
+    let order: Vec<&str> = payload
+        .iter()
+        .map(|p| p["transaction"]["signatures"][0].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["s3a", "s3b", "s4", "s5"]);
+}
+
+#[test]
+fn backfill_refuses_rows_that_are_not_full_transactions() {
+    let signatures_row = json!({"signature": "a", "slot": 1, "err": null});
+    let err = webhook_payload(&[signatures_row]).unwrap_err();
+    assert!(err.to_string().contains("not a full transaction"), "{err}");
+    let mut no_slot = full_tx("a", 1, Value::Null);
+    no_slot.as_object_mut().unwrap().remove("slot");
+    assert!(webhook_payload(&[no_slot]).is_err());
+    let mut no_meta = full_tx("a", 1, Value::Null);
+    no_meta.as_object_mut().unwrap().remove("meta");
+    assert!(webhook_payload(&[full_tx("ok", 1, Value::Null), no_meta]).is_err());
+}
+
+#[test]
+fn backfill_follows_the_status_filter_and_keeps_failed_transactions_as_failed() {
+    let reference = parse_reference(&json!([
+        {"signature": "ok", "slot": 1, "err": null},
+        {"signature": "bad", "slot": 2, "err": {"InstructionError": [0, "Custom"]}},
+    ]))
+    .unwrap();
+    let received = parse_received(&json!([])).unwrap();
+    let source = RecordedSource::from_json(&json!({"responses": {
+        "ok": full_tx("ok", 1, Value::Null),
+        "bad": full_tx("bad", 2, json!({"InstructionError": [0, "Custom"]})),
+    }}))
+    .unwrap();
+
+    let default = diff(&reference, &received, Status::default());
+    let raws = raw_for_missing(&default.missing, &source).unwrap();
+    assert_eq!(webhook_payload(&raws).unwrap().len(), 1);
+
+    let any = diff(&reference, &received, Status::Any);
+    let raws = raw_for_missing(&any.missing, &source).unwrap();
+    let payload = webhook_payload(&raws).unwrap();
+    assert_eq!(payload.len(), 2);
+    assert!(payload[0]["meta"]["err"].is_null());
+    assert!(
+        !payload[1]["meta"]["err"].is_null(),
+        "a raw webhook carries failed transactions with their err"
+    );
+}
+
+struct AnswersRaw(Vec<Value>);
+
+impl TxSource for AnswersRaw {
+    fn fetch_full(&self, _: &[Signature]) -> anyhow::Result<Vec<RefEntry>> {
+        unreachable!("raw only")
+    }
+
+    fn fetch_raw(&self, _: &[Signature]) -> anyhow::Result<Vec<Value>> {
+        Ok(self.0.clone())
+    }
+}
+
+fn entry(signature: &str) -> RefEntry {
+    RefEntry {
+        signature: sig(signature),
+        slot: Some(1),
+        failed: false,
+        logs: None,
+    }
+}
+
+#[test]
+fn raw_fetch_checks_that_each_result_answers_its_row() {
+    let missing = [entry("a"), entry("b")];
+    let swapped = AnswersRaw(vec![
+        full_tx("b", 2, Value::Null),
+        full_tx("a", 1, Value::Null),
+    ]);
+    let err = raw_for_missing(&missing, &swapped).unwrap_err();
+    assert!(err.to_string().contains("not a"), "{err}");
+    let short = AnswersRaw(vec![full_tx("a", 1, Value::Null)]);
+    assert!(raw_for_missing(&missing, &short).is_err());
+    let fine = AnswersRaw(vec![
+        full_tx("a", 1, Value::Null),
+        full_tx("b", 2, Value::Null),
+    ]);
+    assert_eq!(raw_for_missing(&missing, &fine).unwrap().len(), 2);
+    assert!(raw_for_missing(&[], &swapped).unwrap().is_empty());
+}
+
+fn cli(args: &[&str]) -> std::process::Output {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::process::Command::new(env!("CARGO_BIN_EXE_webhook-reconcile"))
+        .current_dir(root)
+        .arg("diff")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+const E2E: [&str; 8] = [
+    "--received",
+    "fixtures/event-lab-received.json",
+    "--reference-pages",
+    "fixtures/event-lab-pages.json",
+    "--status",
+    "any",
+    "--refetch-from",
+    "fixtures/event-lab-refetch.json",
+];
+
+#[test]
+fn cli_pages_the_outage_window_and_writes_the_backfill_file() {
+    let out_path = std::env::temp_dir().join(format!("wr-backfill-{}.json", std::process::id()));
+    let out_arg = out_path.to_str().unwrap();
+    let mut args = E2E.to_vec();
+    args.extend([
+        "--idl",
+        "fixtures/event_lab.idl.json",
+        "--backfill-out",
+        out_arg,
+    ]);
+    let out = cli(&args);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{stdout} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("reference 10 (mocked)"), "{stdout}");
+    assert!(stdout.contains("missing: 3"), "{stdout}");
+    assert!(
+        stdout.contains("decoded events from missing txs: 3"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("backfill: 3 webhook payloads written"),
+        "{stdout}"
+    );
+    let written: Value = serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+    fs::remove_file(&out_path).unwrap();
+    assert_eq!(written.as_array().unwrap().len(), 3);
+    assert!(written[0]["transaction"]["signatures"][0].is_string());
+}
+
+#[test]
+fn cli_writes_the_backfill_to_stdout_and_the_report_to_stderr() {
+    let mut args = E2E.to_vec();
+    args.extend(["--backfill-out", "-"]);
+    let out = cli(&args);
+    let payload: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(payload.as_array().unwrap().len(), 3);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("missing: 3"));
+}
+
+#[test]
+fn cli_fails_loudly_when_the_page_cap_is_hit() {
+    let mut args = E2E.to_vec();
+    args.extend(["--max-pages", "2", "--idl", "fixtures/event_lab.idl.json"]);
+    let out = cli(&args);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("stopped after 2 pages"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn cli_refuses_a_backfill_without_a_source() {
+    let out = cli(&[
+        "--received",
+        "fixtures/event-lab-received.json",
+        "--reference-pages",
+        "fixtures/event-lab-pages.json",
+        "--backfill-out",
+        "-",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--backfill-out needs"));
 }

@@ -1,12 +1,23 @@
 //! Diff the signatures a webhook consumer received against a Helius reference set, refetch only the
-//! missing transactions in full mode, and decode their Anchor events through the IDL.
-//! The diff and the decoder do no network I/O. The refetch sits behind the `TxSource` trait.
+//! missing transactions in full mode, decode their Anchor events through the IDL, and shape them as
+//! webhook payloads for replay.
+//! The diff, the decoder and the payload shaping do no network I/O. The refetch sits behind the
+//! `TxSource` trait and the paged reference read behind `ReferenceSource`.
+pub mod backfill;
 pub mod decode;
+pub mod paging;
 pub mod refetch;
 pub mod types;
 
+pub use backfill::webhook_payload;
 pub use decode::{decode_missing, program_data_lines, DecodeError, Idl};
-pub use refetch::{refetch_missing, HeliusRpc, RecordedSource, RpcError, TxSource};
+pub use paging::{
+    fetch_reference, PageRequest, PageToken, PagingError, RecordedPages, ReferenceSource, Window,
+};
+pub use refetch::{
+    raw_for_missing, refetch_missing, with_logs_from_raw, HeliusRpc, RecordedSource, RpcError,
+    TxSource,
+};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -28,7 +39,7 @@ fn find_rows(v: &Value) -> Option<&Vec<Value>> {
 
 /// Signature of one row. Handles getTransactionsForAddress in signatures mode ({signature}) and
 /// full mode ({transaction:{signatures:[..]}}), Helius enhanced webhooks ({signature}), and plain strings.
-fn row_signature(row: &Value) -> Option<Signature> {
+pub(crate) fn row_signature(row: &Value) -> Option<Signature> {
     if let Some(s) = row.as_str() {
         return Some(Signature(s.to_string()));
     }
@@ -67,7 +78,18 @@ pub(crate) fn parse_ref_row(row: &Value, signature: Signature) -> RefEntry {
     }
 }
 
+/// Keep the first row of each signature. Overlapping pages and concatenated saved files repeat
+/// rows, and a repeated row would be counted as missing twice.
+pub fn dedupe_by_signature(entries: Vec<RefEntry>) -> Vec<RefEntry> {
+    let mut seen = HashSet::new();
+    entries
+        .into_iter()
+        .filter(|e| seen.insert(e.signature.clone()))
+        .collect()
+}
+
 /// Parse a saved Helius reference file into signatures, slots and a `failed` flag per row.
+/// A signature that appears in more than one row is kept once.
 pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
     let rows = find_rows(v).ok_or_else(|| anyhow!("no array of rows found in reference file"))?;
     let mut entries = Vec::new();
@@ -78,7 +100,7 @@ pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
     }
     Ok(ReferenceSet {
         tag: tag_of(v),
-        entries,
+        entries: dedupe_by_signature(entries),
     })
 }
 
