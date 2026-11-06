@@ -1,13 +1,22 @@
 //! Decode Anchor events from transaction logs through an IDL.
 //! An event is a `Program data: <base64>` log line. Its first 8 bytes are the event discriminator,
 //! the rest is the Borsh encoding of the event struct. Logs are the only input, so no network.
-use crate::types::{DecodedEvent, RefEntry, Signature};
+use crate::reference::{RefEntry, Signature};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
+
+/// An Anchor event decoded from a `Program data:` log line through the IDL.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DecodedEvent {
+    pub signature: Signature,
+    pub event: String,
+    pub fields: Map<String, Value>,
+}
 
 /// Why a decode stopped. Each variant means the answer could be wrong if the decoder went on.
 #[derive(Debug, Clone, PartialEq, Eq)]

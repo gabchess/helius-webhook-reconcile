@@ -1,13 +1,116 @@
-//! Read the reference set for a whole outage window, one `getTransactionsForAddress` page at a time.
-//! The fetch sits behind `ReferenceSource`, so tests replay recorded multi-page responses with no key
-//! and no network. The loop is the only place that follows `paginationToken`.
-use crate::refetch::RpcError;
-use crate::{dedupe_by_signature, parse_ref_row, row_signature, types::RefEntry};
+//! The Helius reference set: parse a saved file, or read a whole outage window one
+//! `getTransactionsForAddress` page at a time. The fetch sits behind `ReferenceSource`, so tests replay
+//! recorded multi-page responses with no key and no network. The loop is the only place that follows `paginationToken`.
+use crate::helius::RpcError;
 use anyhow::{anyhow, bail, Result};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
+
+/// A base58 transaction signature. Kept as a string because the diff only needs equality.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+pub struct Signature(pub String);
+
+/// One row of the Helius reference set (getTransactionsForAddress).
+/// `failed` is true when the row carries a non-null `err`.
+/// `logs` is `None` in signatures mode, which carries no logs, and `Some` in full mode.
+/// Decoding events needs `Some`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RefEntry {
+    pub signature: Signature,
+    pub slot: Option<u64>,
+    pub failed: bool,
+    pub logs: Option<Vec<String>>,
+}
+
+/// What Helius says happened. `tag` records where the data came from ("run live", "mocked", "litesvm").
+#[derive(Debug, Clone, Serialize)]
+pub struct ReferenceSet {
+    pub tag: Option<String>,
+    pub entries: Vec<RefEntry>,
+}
+
+/// Find the array of rows in a saved file: a bare array, or nested under data/result/response/payloads/events.
+pub(crate) fn find_rows(v: &Value) -> Option<&Vec<Value>> {
+    if let Value::Array(a) = v {
+        return Some(a);
+    }
+    for k in ["data", "result", "response", "payloads", "events"] {
+        if let Some(a) = v.get(k).and_then(find_rows) {
+            return Some(a);
+        }
+    }
+    None
+}
+
+/// Signature of one row. Handles getTransactionsForAddress in signatures mode ({signature}) and
+/// full mode ({transaction:{signatures:[..]}}), Helius enhanced webhooks ({signature}), and plain strings.
+pub(crate) fn row_signature(row: &Value) -> Option<Signature> {
+    if let Some(s) = row.as_str() {
+        return Some(Signature(s.to_string()));
+    }
+    if let Some(s) = row.get("signature").and_then(Value::as_str) {
+        return Some(Signature(s.to_string()));
+    }
+    row.pointer("/transaction/signatures/0")
+        .and_then(Value::as_str)
+        .map(|s| Signature(s.to_string()))
+}
+
+pub(crate) fn tag_of(v: &Value) -> Option<String> {
+    v.get("tag").and_then(Value::as_str).map(String::from)
+}
+
+/// Build one reference entry from a signatures-mode row or a full-mode row.
+pub(crate) fn parse_ref_row(row: &Value, signature: Signature) -> RefEntry {
+    // signatures mode puts `err` on the row, full mode puts it under `meta`
+    let failed = [row.get("err"), row.pointer("/meta/err")]
+        .into_iter()
+        .flatten()
+        .any(|e| !e.is_null());
+    let logs = row
+        .pointer("/meta/logMessages")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| l.as_str().map(String::from))
+                .collect()
+        });
+    RefEntry {
+        signature,
+        slot: row.get("slot").and_then(Value::as_u64),
+        failed,
+        logs,
+    }
+}
+
+/// Keep the first row of each signature. Overlapping pages and concatenated saved files repeat
+/// rows, and a repeated row would be counted as missing twice.
+pub fn dedupe_by_signature(entries: Vec<RefEntry>) -> Vec<RefEntry> {
+    let mut seen = HashSet::new();
+    entries
+        .into_iter()
+        .filter(|e| seen.insert(e.signature.clone()))
+        .collect()
+}
+
+/// Parse a saved Helius reference file into signatures, slots and a `failed` flag per row.
+/// A signature that appears in more than one row is kept once.
+pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
+    let rows = find_rows(v).ok_or_else(|| anyhow!("no array of rows found in reference file"))?;
+    let mut entries = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let signature =
+            row_signature(row).ok_or_else(|| anyhow!("reference row {i} has no signature"))?;
+        entries.push(parse_ref_row(row, signature));
+    }
+    Ok(ReferenceSet {
+        tag: tag_of(v),
+        entries: dedupe_by_signature(entries),
+    })
+}
 
 /// The outage window. Each bound is optional and inclusive, as `gte` and `lte` in the
 /// `filters.slot` and `filters.blockTime` of getTransactionsForAddress.

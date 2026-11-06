@@ -1,17 +1,15 @@
 # helius-webhook-reconcile
 
-A Rust CLI that finds the transactions missing from your webhook log. It diffs the signatures you logged against what Helius has on chain (`getTransactionsForAddress`), refetches only the missing ones, and writes them as webhook payloads you can replay.
+Finds the transactions missing from your Helius webhook log. It diffs the signatures you logged against `getTransactionsForAddress`, refetches only the missing ones, and writes them as webhook payloads you can replay.
 
-The Helius webhooks FAQ says: "If all retry attempts fail, the event is permanently lost" ([source](https://www.helius.dev/docs/faqs/webhooks), read 2026-11-06). This tool covers the step after that.
-
-## Quick start (offline, no key)
+## Quick start
 
 ```
 cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received.json --reference fixtures/gtfa-live.json
 echo $?
 ```
 
-Data tags: `run live` is a real Helius call, `mocked` is hand-built, `litesvm` comes from LiteSVM. Here the received set is `mocked`, so the 2 missing rows are a test, not a real loss.
+Offline, no key. The reference is a real Helius call (`run live`) and the received set is `mocked`, so the 2 missing rows are a test. Exit code 0 means nothing is missing under `--status` (default `succeeded` skips failed transactions; `--status any` includes them), 1 means events are missing, 2 means the run failed.
 
 ```
 reference 100 (run live), received 97 (mocked), status succeeded
@@ -26,33 +24,9 @@ extra (received, not in reference): 0
 1
 ```
 
-Exit code 0 means nothing is missing, 1 means events are missing, 2 means the run failed.
-
-Enhanced webhooks do not send failed transactions, so the default `--status succeeded` leaves the 3 failed rows out. Use `--status any` for a raw webhook.
-
-No local Rust? Prefix the command with `docker run --rm -v "$PWD:/w" -w /w rust:1`.
-
-## What you need
-
-| Need | When |
-| --- | --- |
-| Rust, or Docker with `rust:1` | every command |
-| `HELIUS_API_KEY` from https://dashboard.helius.dev | only `--live-reference` and `--live` |
-| Docker with `solanafoundation/anchor:v1.0.2` | only to rebuild `programs/event-lab` and re-record its fixtures |
-
-## Key setup
-
-The tool reads `HELIUS_API_KEY` from the environment. Keep a filled copy of `.env.example` outside the repo and load it for one command:
-
-```
-( set -a; . ~/.secrets/helius.env; set +a; cargo run -q -p webhook-reconcile -- diff ... --live )
-```
-
-The tool never prints the key.
-
 ## Live run
 
-Page an outage window, refetch the missing rows and write a backfill:
+Set `HELIUS_API_KEY` (from https://dashboard.helius.dev) in the environment. The tool never prints it. The live calls go to Helius mainnet. Write a backfill for an outage window:
 
 ```
 cargo run -q -p webhook-reconcile -- diff --received received.json \
@@ -60,38 +34,19 @@ cargo run -q -p webhook-reconcile -- diff --received received.json \
   --live --backfill-out backfill.json
 ```
 
-The live calls go to Helius mainnet (`mainnet.helius-rpc.com`).
+The backfill is raw webhook shape (`slot`, `blockTime`, `transaction`, `meta`, oldest slot first) with no enhanced fields, so check that your endpoint accepts raw payloads before you replay. Rows your webhook's filters exclude are not missing, so check the filters before you replay.
 
-Rows that your webhook's filters exclude are not missing. Check the filters before you replay.
+`--received` takes a JSON array of transactions or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`. Flatten saved POST bodies with `jq -s 'flatten(1)' posts/*.json > received.json`. Add `--idl <idl.json>` to decode Anchor events.
 
-`--received` takes one flat JSON array of transactions or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`. One array per POST body does not parse. Flatten it first with `jq -s 'flatten(1)' posts/*.json > received.json`.
+## Requirements
 
-`backfill.json` holds raw webhook payloads (`slot`, `blockTime`, `transaction`, `meta`), oldest slot first.
-
-Other flags: `--idl` decodes Anchor events. `--json` prints JSON. `--reference-pages` and `--refetch-from` replay recorded responses offline.
-
-## How to know it works
+Rust, or Docker (prefix commands with `docker run --rm -v "$PWD:/w" -w /w rust:1`, and add `-e HELIUS_API_KEY` for live runs). Tests run offline with no key. They print `test result: ok`, 12 passed and 88 passed:
 
 ```
 cargo test -p webhook-reconcile --locked
 ```
 
-Offline, no key. It prints `test result: ok`, 12 passed for the CLI and 88 passed for `tests/offline.rs`.
-
-## Layout
-
-```
-crates/webhook-reconcile/   # the CLI: diff, paging, refetch, decode, backfill
-programs/event-lab/         # Anchor test program
-lab/                        # LiteSVM recorder for fixtures/
-fixtures/                   # recorded Helius responses and test inputs
-```
-
-## What it does not do
-
-- It never sends a transaction or loads a keypair.
-- It does not post the backfill. It writes a file and you replay it.
-- It does not build the enhanced webhook fields (`type`, `source`, `description`, `events`).
+To run one test, add its name after the command.
 
 ## License
 
