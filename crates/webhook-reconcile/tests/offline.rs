@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 use webhook_reconcile::decode::event_discriminator;
-use webhook_reconcile::refetch::parse_batch_response;
+use webhook_reconcile::refetch::{parse_batch_response, TxSource};
 use webhook_reconcile::types::{RefEntry, Signature};
 use webhook_reconcile::{
     decode_missing, diff, parse_received, parse_reference, program_data_lines, refetch_missing,
@@ -308,6 +308,42 @@ fn batch_response_errors_are_loud() {
 fn helius_rpc_never_shows_its_key() {
     let rpc = HeliusRpc::new("https://example.invalid", "SECRET-KEY-123");
     assert!(!format!("{rpc:?}").contains("SECRET-KEY-123"));
+}
+
+#[test]
+fn transport_error_text_never_contains_the_key() {
+    let rpc = HeliusRpc::new("http://127.0.0.1:1", "SECRET-KEY-123");
+    let err = rpc.fetch_full(&[sig("a")]).unwrap_err();
+    let text = format!("{err:#} {err:?}");
+    assert!(!text.contains("SECRET-KEY-123"), "key leaked: {text}");
+    assert!(!text.contains("api-key"), "key parameter leaked: {text}");
+}
+
+struct AnswersWith(Vec<RefEntry>);
+
+impl TxSource for AnswersWith {
+    fn fetch_full(&self, _: &[Signature]) -> anyhow::Result<Vec<RefEntry>> {
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn refetch_rejects_a_signature_nobody_asked_for() {
+    let missing = vec![RefEntry {
+        signature: sig("asked"),
+        slot: Some(1),
+        failed: false,
+        logs: None,
+    }];
+    let source = AnswersWith(vec![RefEntry {
+        signature: sig("stranger"),
+        slot: Some(2),
+        failed: false,
+        logs: Some(vec![]),
+    }]);
+    let err = refetch_missing(&missing, &source).unwrap_err();
+    assert!(err.to_string().contains("stranger"), "{err}");
+    assert!(err.to_string().contains("not requested"), "{err}");
 }
 
 #[test]
