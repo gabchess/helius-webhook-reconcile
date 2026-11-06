@@ -7,14 +7,14 @@ use clap::{ArgGroup, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::{fs, path::PathBuf, process::ExitCode};
-use webhook_reconcile::types::{ReferenceSet, Status};
+use webhook_reconcile::types::{RefEntry, ReferenceSet, Status};
 use webhook_reconcile::{
     decode_missing, diff, fetch_reference, parse_received, parse_reference, raw_for_missing,
     refetch_missing, webhook_payload, with_logs_from_raw, HeliusRpc, Idl, RecordedPages,
-    RecordedSource, TxSource, Window,
+    RecordedSource, ReferenceSource, TxSource, Window,
 };
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(
     name = "webhook-reconcile",
     about = "Find Helius webhook events that were never delivered"
@@ -24,7 +24,7 @@ struct Cli {
     cmd: Cmd,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Cmd {
     /// Print signatures the reference has and the webhook never received, plus duplicates.
     #[command(group(ArgGroup::new("reference_source").required(true).args(["reference", "reference_pages", "live_reference"])))]
@@ -89,26 +89,82 @@ fn load(p: &PathBuf) -> Result<Value> {
         .with_context(|| format!("parse {}", p.display()))
 }
 
-fn run() -> Result<bool> {
+/// The outage window the four window flags name.
+fn window_of(cmd: &Cmd) -> Window {
     let Cmd::Diff {
-        received,
-        reference,
-        reference_pages,
-        live_reference: _,
-        address,
         slot_gte,
         slot_lte,
         time_gte,
         time_lte,
+        ..
+    } = cmd;
+    Window {
+        slot_gte: *slot_gte,
+        slot_lte: *slot_lte,
+        time_gte: *time_gte,
+        time_lte: *time_lte,
+    }
+}
+
+/// Everything one paged read of the reference set needs. The recorded and the live read start
+/// from the same value, so each flag has one path to the request.
+#[derive(Debug, PartialEq, Eq)]
+struct Paging {
+    address: String,
+    window: Window,
+    limit: u32,
+    max_pages: usize,
+}
+
+fn paging_of(cmd: &Cmd) -> Paging {
+    let Cmd::Diff {
+        address,
         page_limit,
         max_pages,
+        ..
+    } = cmd;
+    Paging {
+        address: address.clone().unwrap_or_default(),
+        window: window_of(cmd),
+        limit: *page_limit,
+        max_pages: *max_pages as usize,
+    }
+}
+
+impl Paging {
+    fn read(&self, source: &dyn ReferenceSource) -> Result<Vec<RefEntry>> {
+        fetch_reference(
+            source,
+            &self.address,
+            &self.window,
+            self.limit,
+            self.max_pages,
+        )
+    }
+
+    fn read_live(&self, source: &dyn ReferenceSource) -> Result<ReferenceSet> {
+        Ok(ReferenceSet {
+            tag: Some("run live".into()),
+            entries: self.read(source)?,
+        })
+    }
+}
+
+fn run() -> Result<bool> {
+    let cli = Cli::parse();
+    let paging = paging_of(&cli.cmd);
+    let Cmd::Diff {
+        received,
+        reference,
+        reference_pages,
         status,
         json,
         idl,
         refetch_from,
         live,
         backfill_out,
-    } = Cli::parse().cmd;
+        ..
+    } = cli.cmd;
 
     let has_source = refetch_from.is_some() || live;
     if has_source && idl.is_none() && backfill_out.is_none() {
@@ -117,42 +173,16 @@ fn run() -> Result<bool> {
     if backfill_out.is_some() && !has_source {
         bail!("--backfill-out needs --refetch-from or --live");
     }
-    let window = Window {
-        slot_gte,
-        slot_lte,
-        time_gte,
-        time_lte,
-    };
     let reference = match (&reference, &reference_pages) {
         (Some(p), _) => parse_reference(&load(p)?)?,
         (None, Some(p)) => {
             let file = load(p)?;
-            let pages = RecordedPages::from_json(&file)?;
-            let entries = fetch_reference(
-                &pages,
-                address.as_deref().unwrap_or(""),
-                &window,
-                page_limit,
-                max_pages as usize,
-            )?;
             ReferenceSet {
                 tag: file.get("tag").and_then(Value::as_str).map(String::from),
-                entries,
+                entries: paging.read(&RecordedPages::from_json(&file)?)?,
             }
         }
-        (None, None) => {
-            let entries = fetch_reference(
-                &HeliusRpc::from_env()?,
-                address.as_deref().unwrap_or(""),
-                &window,
-                page_limit,
-                max_pages as usize,
-            )?;
-            ReferenceSet {
-                tag: Some("run live".into()),
-                entries,
-            }
-        }
+        (None, None) => paging.read_live(&HeliusRpc::from_env()?)?,
     };
     let received = parse_received(&load(&received)?)?;
     let report = diff(&reference, &received, status);
@@ -279,5 +309,217 @@ fn main() -> ExitCode {
             eprintln!("error: {e:#}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+    use serde_json::json;
+    use webhook_reconcile::PageToken;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(
+            ["webhook-reconcile", "diff", "--received", "r"]
+                .into_iter()
+                .chain(args.iter().copied()),
+        )
+    }
+
+    fn kind(args: &[&str]) -> Option<ErrorKind> {
+        parse(args).err().map(|e| e.kind())
+    }
+
+    const WINDOW_FLAGS: [&str; 8] = [
+        "--slot-gte",
+        "1",
+        "--slot-lte",
+        "2",
+        "--time-gte",
+        "3",
+        "--time-lte",
+        "4",
+    ];
+
+    #[test]
+    fn every_window_flag_reaches_the_window() {
+        let mut args = vec!["--reference-pages", "p"];
+        args.extend(WINDOW_FLAGS);
+        let cli = parse(&args).unwrap();
+        assert_eq!(
+            window_of(&cli.cmd),
+            Window {
+                slot_gte: Some(1),
+                slot_lte: Some(2),
+                time_gte: Some(3),
+                time_lte: Some(4),
+            }
+        );
+    }
+
+    #[test]
+    fn every_paging_flag_reaches_the_page_reader() {
+        let mut args = vec![
+            "--reference-pages",
+            "p",
+            "--address",
+            "addr",
+            "--page-limit",
+            "7",
+            "--max-pages",
+            "3",
+        ];
+        args.extend(WINDOW_FLAGS);
+        let cli = parse(&args).unwrap();
+        assert_eq!(
+            paging_of(&cli.cmd),
+            Paging {
+                address: "addr".into(),
+                window: Window {
+                    slot_gte: Some(1),
+                    slot_lte: Some(2),
+                    time_gte: Some(3),
+                    time_lte: Some(4),
+                },
+                limit: 7,
+                max_pages: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn the_defaults_read_the_whole_window_with_a_wide_page_and_a_cap() {
+        let cli = parse(&["--reference-pages", "p"]).unwrap();
+        assert_eq!(
+            paging_of(&cli.cmd),
+            Paging {
+                address: String::new(),
+                window: Window::default(),
+                limit: 1000,
+                max_pages: 50,
+            }
+        );
+        let Cmd::Diff { status, .. } = cli.cmd;
+        assert_eq!(status, Status::Succeeded);
+    }
+
+    #[test]
+    fn the_status_flag_reaches_the_diff_arguments() {
+        for (flag, want) in [
+            ("succeeded", Status::Succeeded),
+            ("failed", Status::Failed),
+            ("any", Status::Any),
+        ] {
+            let Cmd::Diff { status, .. } =
+                parse(&["--reference", "r", "--status", flag]).unwrap().cmd;
+            assert_eq!(status, want);
+        }
+    }
+
+    #[test]
+    fn page_limit_and_max_pages_keep_their_ranges() {
+        let with = |flag: &str, value: &str| parse(&["--reference-pages", "p", flag, value]);
+        assert!(with("--page-limit", "1").is_ok());
+        assert!(with("--page-limit", "1000").is_ok());
+        assert!(with("--page-limit", "0").is_err());
+        assert!(with("--page-limit", "1001").is_err());
+        assert!(with("--max-pages", "1").is_ok());
+        assert!(with("--max-pages", "100000").is_ok());
+        assert!(with("--max-pages", "0").is_err());
+    }
+
+    #[test]
+    fn exactly_one_reference_source_is_required() {
+        assert_eq!(kind(&[]), Some(ErrorKind::MissingRequiredArgument));
+        assert_eq!(kind(&["--reference", "r"]), None);
+        assert_eq!(kind(&["--reference-pages", "p"]), None);
+        assert_eq!(kind(&["--live-reference", "--address", "a"]), None);
+        assert_eq!(
+            kind(&["--reference", "r", "--reference-pages", "p"]),
+            Some(ErrorKind::ArgumentConflict)
+        );
+        assert_eq!(
+            kind(&[
+                "--reference-pages",
+                "p",
+                "--live-reference",
+                "--address",
+                "a"
+            ]),
+            Some(ErrorKind::ArgumentConflict)
+        );
+        assert_eq!(
+            kind(&["--live-reference"]),
+            Some(ErrorKind::MissingRequiredArgument)
+        );
+    }
+
+    #[test]
+    fn window_and_address_flags_conflict_with_a_saved_reference_only() {
+        for flag in [
+            ["--address", "a"],
+            ["--slot-gte", "1"],
+            ["--slot-lte", "2"],
+            ["--time-gte", "3"],
+            ["--time-lte", "4"],
+        ] {
+            let mut saved = vec!["--reference", "r"];
+            saved.extend(flag);
+            assert_eq!(kind(&saved), Some(ErrorKind::ArgumentConflict), "{flag:?}");
+            let mut paged = vec!["--reference-pages", "p"];
+            paged.extend(flag);
+            assert_eq!(kind(&paged), None, "{flag:?}");
+        }
+    }
+
+    fn recorded_two_pages() -> RecordedPages {
+        RecordedPages::from_json(&json!({"pages": [
+            {"after": null, "result": {"data": [{"signature": "a", "slot": 1, "err": null}],
+                                       "paginationToken": "1:0"}},
+            {"after": "1:0", "result": {"data": [{"signature": "b", "slot": 2, "err": null}]}},
+        ]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_page_reader_sends_the_address_window_and_limit_on_every_page() {
+        let mut args = vec![
+            "--reference-pages",
+            "p",
+            "--address",
+            "addr",
+            "--page-limit",
+            "7",
+        ];
+        args.extend(WINDOW_FLAGS);
+        let paging = paging_of(&parse(&args).unwrap().cmd);
+        let source = recorded_two_pages();
+        assert_eq!(paging.read(&source).unwrap().len(), 2);
+        let requests = source.requests();
+        assert_eq!(requests.len(), 2);
+        for req in &requests {
+            assert_eq!(req.address, "addr");
+            assert_eq!(req.limit, 7);
+            assert_eq!(req.window, paging.window);
+        }
+        assert_eq!(requests[1].token, Some(PageToken::new("1:0")));
+    }
+
+    #[test]
+    fn the_page_reader_stops_at_max_pages() {
+        let cli = parse(&["--reference-pages", "p", "--max-pages", "1"]).unwrap();
+        let err = paging_of(&cli.cmd).read(&recorded_two_pages()).unwrap_err();
+        assert!(err.to_string().contains("stopped after 1 pages"), "{err}");
+    }
+
+    #[test]
+    fn a_live_read_is_tagged_run_live() {
+        let cli = parse(&["--reference-pages", "p"]).unwrap();
+        let set = paging_of(&cli.cmd)
+            .read_live(&recorded_two_pages())
+            .unwrap();
+        assert_eq!(set.tag.as_deref(), Some("run live"));
+        assert_eq!(set.entries.len(), 2);
     }
 }
