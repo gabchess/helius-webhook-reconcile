@@ -1,6 +1,7 @@
 //! Data shapes. Everything else in this crate is a function between these types.
 use clap::ValueEnum;
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 /// A base58 transaction signature. Kept as a string because the diff only needs equality.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -8,11 +9,14 @@ pub struct Signature(pub String);
 
 /// One row of the Helius reference set (getTransactionsForAddress).
 /// `failed` is true when the row carries a non-null `err`.
+/// `logs` is `None` in signatures mode, which carries no logs, and `Some` in full mode.
+/// Decoding events needs `Some`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RefEntry {
     pub signature: Signature,
     pub slot: Option<u64>,
     pub failed: bool,
+    pub logs: Option<Vec<String>>,
 }
 
 /// What Helius says happened. `tag` records where the data came from ("run live", "mocked", "litesvm").
@@ -64,4 +68,12 @@ pub struct DiffReport {
     pub skipped_by_status: Vec<RefEntry>,
     pub duplicates: Vec<(Signature, usize)>,
     pub extra: Vec<Signature>,
+}
+
+/// An Anchor event decoded from a `Program data:` log line through the IDL.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DecodedEvent {
+    pub signature: Signature,
+    pub event: String,
+    pub fields: Map<String, Value>,
 }

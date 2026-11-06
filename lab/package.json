@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test hello.test.mjs"
+    "test": "node --test record.test.mjs"
   },
   "devDependencies": {
     "@solana/kit": "8.6.0",

@@ -1,0 +1,100 @@
+{
+  "tag": "litesvm",
+  "note": "getTransactionsForAddress transactionDetails=signatures shape: no logs, so no decode",
+  "address": "9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6",
+  "result": {
+    "data": [
+      {
+        "signature": "5sXb3PSM1imBoS8hChxwT1UihxetKwCrnw6gJBy1cNAWvgtpTv2aULvi26oMZgn11nzRPLqcUKCiFrUuSKXWBuW1",
+        "slot": 100,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "2dvo4iAxAJ8ruo5E69ianrkoaP1a5xLg4qtdLG8YNNsu2FdgqVMR2qhou9wttyMiNPUpDr2NkjbzNkGUZHNSHGWd",
+        "slot": 101,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "3ChjaDHLvRPXmj5Z9oRzNT5TMRyoEU1VYkgxNBPyW3FwvAwvDQ2mEX4o7UXNwTjWfxoYQBdbZx7Uo9n8n2Jf6f66",
+        "slot": 102,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "kMhft6cPZuSM3fWV1T2A9DmVqBBXZpXmDSC31fNU8SzfX17eLupLrPfanH6eRWahFJTfHPnou13V8GjNmmGmuq4",
+        "slot": 103,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "DksXZ325KGScGY5h7UCxNExMdo9x2LaHQLdJeDVdiMRmsKimBM42AK2UvrseNXfoDdBfekkwTLatKFkQCgqSM49",
+        "slot": 104,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "3zvx7weVvEowF9P4d7v9mWmVDV1egfjY4rudQPPopWdSVTm7S519NcmEoJAWMpxn7NFRWVtqE8dJz7yBW2uEcQrn",
+        "slot": 105,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "3vokDuGaHiwhLZ8n2419XdnoLFmQoy8G7Z7NZQLWJfb32JGLPWeLGP7CvvCJtqfZzoKjAnr4XNiQmjuoa4mjf3eH",
+        "slot": 106,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "3Py8oBS9zuqu38EbXsq4SWHisxga93Jci6ZsyCBR4kXAmi3WmpZdZoznUM6aPsCCL34G414Jkrp7gVVoq3qESsyY",
+        "slot": 107,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "2aVPYh7YjTiYCwcPViBDCweSPg3aSp3iEsKFPg5HWiDVRUqoucHuwsTwbgRMsQtY9WwfRKcjobCtTEXTYRM9YND1",
+        "slot": 108,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      },
+      {
+        "signature": "nQC1nTcxKqJnPcQkmKgFAqRdSt8GyZ65LYUWbRt8Tz69X8PcKdQSzfFZ32AcpgcR7mhCT8hrLYUFrcy22N5qg54",
+        "slot": 109,
+        "transactionIndex": 0,
+        "err": null,
+        "memo": null,
+        "blockTime": null,
+        "confirmationStatus": "finalized"
+      }
+    ],
+    "paginationToken": null
+  }
+}

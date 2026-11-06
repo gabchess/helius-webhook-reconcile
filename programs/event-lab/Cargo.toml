@@ -1,7 +1,7 @@
 [package]
 name = "event-lab"
 version = "0.1.0"
-description = "Stub for chunk 2. No logic yet"
+description = "Anchor program that emits one event per instruction, for decoding tests"
 edition = "2021"
 license = "MIT"
 

@@ -7,8 +7,9 @@ Rules for any agent that changes this repo.
 
 ## Layout
 - `crates/webhook-reconcile` holds the Rust CLI and its tests.
-- `programs/event-lab` holds the Anchor program. It is a stub with no logic. Chunk 2 adds the real instruction and event.
-- `lab/` holds the Node tests that run the built program in LiteSVM.
+- `programs/event-lab` holds the Anchor program. `record_transfer` emits one `TransferRecorded` event.
+- `lab/` holds the Node test that runs the built program in LiteSVM, asserts on its events and records `fixtures/event-lab-*.json`. The payer key is fixed, so a fresh recording must equal the committed files. CI fails on any drift.
+- `crates/webhook-reconcile/src/decode.rs` decodes events through the IDL. `refetch.rs` holds the `TxSource` trait, the offline `RecordedSource` and the live `HeliusRpc`.
 
 ## Run, test and lint
 There is no local cargo. Run everything in Docker. Pass the Windows form of the path to `docker -v`, because Bash remaps `$PWD`. Also set `MSYS_NO_PATHCONV=1` in the Bash tool, or Git Bash rewrites `-w /w` to `W:/`.
