@@ -1,9 +1,13 @@
 //! webhook-reconcile diff --received <json> --reference <json> [--status succeeded|failed|any] [--json]
+//!   [--idl <json> [--refetch-from <json> | --live]]
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf, process::ExitCode};
-use webhook_reconcile::{diff, parse_received, parse_reference, types::Status};
+use webhook_reconcile::{
+    decode_missing, diff, parse_received, parse_reference, refetch_missing, types::Status,
+    HeliusRpc, Idl, RecordedSource, TxSource,
+};
 
 #[derive(Parser)]
 #[command(
@@ -31,6 +35,15 @@ enum Cmd {
         status: Status,
         #[arg(long)]
         json: bool,
+        /// Anchor IDL. Decode the `Program data:` events of the missing transactions.
+        #[arg(long)]
+        idl: Option<PathBuf>,
+        /// Replay recorded getTransaction results instead of calling Helius (offline, no key).
+        #[arg(long, requires = "idl", conflicts_with = "live")]
+        refetch_from: Option<PathBuf>,
+        /// Refetch the missing signatures from Helius. Reads HELIUS_API_KEY from the environment.
+        #[arg(long, requires = "idl")]
+        live: bool,
     },
 }
 
@@ -45,10 +58,28 @@ fn run() -> Result<bool> {
         reference,
         status,
         json,
+        idl,
+        refetch_from,
+        live,
     } = Cli::parse().cmd;
     let reference = parse_reference(&load(&reference)?)?;
     let received = parse_received(&load(&received)?)?;
     let report = diff(&reference, &received, status);
+    let decoded = match &idl {
+        Some(p) => {
+            let source: Option<Box<dyn TxSource>> = match (&refetch_from, live) {
+                (Some(f), _) => Some(Box::new(RecordedSource::from_json(&load(f)?)?)),
+                (None, true) => Some(Box::new(HeliusRpc::from_env()?)),
+                (None, false) => None,
+            };
+            let missing = match &source {
+                Some(s) => refetch_missing(&report.missing, s.as_ref())?,
+                None => report.missing.clone(),
+            };
+            Some(decode_missing(&Idl::parse(&load(p)?)?, &missing)?)
+        }
+        None => None,
+    };
 
     if json {
         let out = json!({
@@ -59,6 +90,7 @@ fn run() -> Result<bool> {
             "skipped_by_status": report.skipped_by_status,
             "duplicates": report.duplicates.iter().map(|(s, n)| json!({"signature": s, "times": n})).collect::<Vec<_>>(),
             "extra": report.extra,
+            "decoded": decoded,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -92,6 +124,17 @@ fn run() -> Result<bool> {
         println!("extra (received, not in reference): {}", report.extra.len());
         for s in &report.extra {
             println!("  {}", s.0);
+        }
+        if let Some(events) = &decoded {
+            println!("decoded events from missing txs: {}", events.len());
+            for e in events {
+                println!(
+                    "  {} {} {}",
+                    e.signature.0,
+                    e.event,
+                    serde_json::to_string(&e.fields)?
+                );
+            }
         }
     }
     Ok(!report.missing.is_empty())

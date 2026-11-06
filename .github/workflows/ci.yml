@@ -20,7 +20,7 @@ jobs:
       - name: Clippy
         run: cargo clippy -p webhook-reconcile --all-targets -- -D warnings
       - name: Test
-        run: cargo test -p webhook-reconcile
+        run: cargo test -p webhook-reconcile --locked
   anchor:
     name: anchor
     runs-on: ubuntu-latest
@@ -30,7 +30,11 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Build the event-lab stub
+      - name: Build event-lab
         run: export HOME=/root && anchor build --ignore-keys
-      - name: LiteSVM hello test
+      - name: Clippy event-lab
+        run: export HOME=/root && cargo clippy -p event-lab --all-targets -- -D warnings
+      - name: Record events in LiteSVM
         run: export HOME=/root && cd lab && npm ci --no-audit --no-fund && npm test
+      - name: Fixtures match a fresh recording
+        run: git config --global --add safe.directory "$PWD" && git diff --exit-code -- fixtures

@@ -1,5 +1,12 @@
-//! Diff the signatures a webhook consumer received against a Helius reference set. No network.
+//! Diff the signatures a webhook consumer received against a Helius reference set, refetch only the
+//! missing transactions in full mode, and decode their Anchor events through the IDL.
+//! The diff and the decoder do no network I/O. The refetch sits behind the `TxSource` trait.
+pub mod decode;
+pub mod refetch;
 pub mod types;
+
+pub use decode::{decode_missing, program_data_lines, DecodeError, Idl};
+pub use refetch::{refetch_missing, HeliusRpc, RecordedSource, TxSource};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;
@@ -37,6 +44,29 @@ fn tag_of(v: &Value) -> Option<String> {
     v.get("tag").and_then(Value::as_str).map(String::from)
 }
 
+/// Build one reference entry from a signatures-mode row or a full-mode row.
+pub(crate) fn parse_ref_row(row: &Value, signature: Signature) -> RefEntry {
+    // signatures mode puts `err` on the row, full mode puts it under `meta`
+    let failed = [row.get("err"), row.pointer("/meta/err")]
+        .into_iter()
+        .flatten()
+        .any(|e| !e.is_null());
+    let logs = row
+        .pointer("/meta/logMessages")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| l.as_str().map(String::from))
+                .collect()
+        });
+    RefEntry {
+        signature,
+        slot: row.get("slot").and_then(Value::as_u64),
+        failed,
+        logs,
+    }
+}
+
 /// Parse a saved Helius reference file into signatures, slots and a `failed` flag per row.
 pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
     let rows = find_rows(v).ok_or_else(|| anyhow!("no array of rows found in reference file"))?;
@@ -44,16 +74,7 @@ pub fn parse_reference(v: &Value) -> Result<ReferenceSet> {
     for (i, row) in rows.iter().enumerate() {
         let signature =
             row_signature(row).ok_or_else(|| anyhow!("reference row {i} has no signature"))?;
-        // signatures mode puts `err` on the row, full mode puts it under `meta`
-        let failed = [row.get("err"), row.pointer("/meta/err")]
-            .into_iter()
-            .flatten()
-            .any(|e| !e.is_null());
-        entries.push(RefEntry {
-            signature,
-            slot: row.get("slot").and_then(Value::as_u64),
-            failed,
-        });
+        entries.push(parse_ref_row(row, signature));
     }
     Ok(ReferenceSet {
         tag: tag_of(v),

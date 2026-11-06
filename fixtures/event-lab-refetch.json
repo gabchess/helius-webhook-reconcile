@@ -1,0 +1,216 @@
+{
+  "tag": "litesvm",
+  "note": "getTransaction results keyed by signature, for replaying a refetch offline",
+  "responses": {
+    "5sXb3PSM1imBoS8hChxwT1UihxetKwCrnw6gJBy1cNAWvgtpTv2aULvi26oMZgn11nzRPLqcUKCiFrUuSKXWBuW1": {
+      "slot": 100,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "5sXb3PSM1imBoS8hChxwT1UihxetKwCrnw6gJBy1cNAWvgtpTv2aULvi26oMZgn11nzRPLqcUKCiFrUuSKXWBuW1"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjoAwAAAAAAADIAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItMA==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "2dvo4iAxAJ8ruo5E69ianrkoaP1a5xLg4qtdLG8YNNsu2FdgqVMR2qhou9wttyMiNPUpDr2NkjbzNkGUZHNSHGWd": {
+      "slot": 101,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "2dvo4iAxAJ8ruo5E69ianrkoaP1a5xLg4qtdLG8YNNsu2FdgqVMR2qhou9wttyMiNPUpDr2NkjbzNkGUZHNSHGWd"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjpAwAAAAAAADkAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItMQ==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "3ChjaDHLvRPXmj5Z9oRzNT5TMRyoEU1VYkgxNBPyW3FwvAwvDQ2mEX4o7UXNwTjWfxoYQBdbZx7Uo9n8n2Jf6f66": {
+      "slot": 102,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "3ChjaDHLvRPXmj5Z9oRzNT5TMRyoEU1VYkgxNBPyW3FwvAwvDQ2mEX4o7UXNwTjWfxoYQBdbZx7Uo9n8n2Jf6f66"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjqAwAAAAAAAEAAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItMg==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "kMhft6cPZuSM3fWV1T2A9DmVqBBXZpXmDSC31fNU8SzfX17eLupLrPfanH6eRWahFJTfHPnou13V8GjNmmGmuq4": {
+      "slot": 103,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "kMhft6cPZuSM3fWV1T2A9DmVqBBXZpXmDSC31fNU8SzfX17eLupLrPfanH6eRWahFJTfHPnou13V8GjNmmGmuq4"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjrAwAAAAAAAEcAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItMw==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "DksXZ325KGScGY5h7UCxNExMdo9x2LaHQLdJeDVdiMRmsKimBM42AK2UvrseNXfoDdBfekkwTLatKFkQCgqSM49": {
+      "slot": 104,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "DksXZ325KGScGY5h7UCxNExMdo9x2LaHQLdJeDVdiMRmsKimBM42AK2UvrseNXfoDdBfekkwTLatKFkQCgqSM49"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjsAwAAAAAAAE4AAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItNA==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "3zvx7weVvEowF9P4d7v9mWmVDV1egfjY4rudQPPopWdSVTm7S519NcmEoJAWMpxn7NFRWVtqE8dJz7yBW2uEcQrn": {
+      "slot": 105,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "3zvx7weVvEowF9P4d7v9mWmVDV1egfjY4rudQPPopWdSVTm7S519NcmEoJAWMpxn7NFRWVtqE8dJz7yBW2uEcQrn"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjtAwAAAAAAAFUAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItNQ==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "3vokDuGaHiwhLZ8n2419XdnoLFmQoy8G7Z7NZQLWJfb32JGLPWeLGP7CvvCJtqfZzoKjAnr4XNiQmjuoa4mjf3eH": {
+      "slot": 106,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "3vokDuGaHiwhLZ8n2419XdnoLFmQoy8G7Z7NZQLWJfb32JGLPWeLGP7CvvCJtqfZzoKjAnr4XNiQmjuoa4mjf3eH"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjuAwAAAAAAAFwAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItNg==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "3Py8oBS9zuqu38EbXsq4SWHisxga93Jci6ZsyCBR4kXAmi3WmpZdZoznUM6aPsCCL34G414Jkrp7gVVoq3qESsyY": {
+      "slot": 107,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "3Py8oBS9zuqu38EbXsq4SWHisxga93Jci6ZsyCBR4kXAmi3WmpZdZoznUM6aPsCCL34G414Jkrp7gVVoq3qESsyY"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjvAwAAAAAAAGMAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItNw==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "2aVPYh7YjTiYCwcPViBDCweSPg3aSp3iEsKFPg5HWiDVRUqoucHuwsTwbgRMsQtY9WwfRKcjobCtTEXTYRM9YND1": {
+      "slot": 108,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "2aVPYh7YjTiYCwcPViBDCweSPg3aSp3iEsKFPg5HWiDVRUqoucHuwsTwbgRMsQtY9WwfRKcjobCtTEXTYRM9YND1"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjwAwAAAAAAAGoAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItOA==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    },
+    "nQC1nTcxKqJnPcQkmKgFAqRdSt8GyZ65LYUWbRt8Tz69X8PcKdQSzfFZ32AcpgcR7mhCT8hrLYUFrcy22N5qg54": {
+      "slot": 109,
+      "blockTime": null,
+      "transaction": {
+        "signatures": [
+          "nQC1nTcxKqJnPcQkmKgFAqRdSt8GyZ65LYUWbRt8Tz69X8PcKdQSzfFZ32AcpgcR7mhCT8hrLYUFrcy22N5qg54"
+        ],
+        "message": {}
+      },
+      "meta": {
+        "err": null,
+        "fee": 5000,
+        "logMessages": [
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 invoke [1]",
+          "Program log: Instruction: RecordTransfer",
+          "Program data: bAdmmvGjZTjxAwAAAAAAAHEAAAAAAAAA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iwHAAAAb3JkZXItOQ==",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 consumed 1296 of 200000 compute units",
+          "Program 9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6 success"
+        ]
+      }
+    }
+  }
+}

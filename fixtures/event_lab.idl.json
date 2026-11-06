@@ -1,0 +1,95 @@
+{
+  "address": "9LQwY9ThwtXFhpgMZ1MmRBfA5wc9YUSTUGDcmoKcKTZ6",
+  "metadata": {
+    "name": "event_lab",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Anchor program that emits one event per instruction, for decoding tests"
+  },
+  "docs": [
+    "One instruction, one event. The event goes to the logs as a `Program data:` line,",
+    "which is what a webhook consumer has to decode after the fact."
+  ],
+  "instructions": [
+    {
+      "name": "record_transfer",
+      "docs": [
+        "Emit one `TransferRecorded` event. The signer is the only account and pays nothing."
+      ],
+      "discriminator": [
+        186,
+        5,
+        70,
+        146,
+        90,
+        18,
+        74,
+        248
+      ],
+      "accounts": [
+        {
+          "name": "signer",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "memo",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "TransferRecorded",
+      "discriminator": [
+        108,
+        7,
+        102,
+        154,
+        241,
+        163,
+        101,
+        56
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "TransferRecorded",
+      "docs": [
+        "The event a webhook consumer has to decode after the fact."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "who",
+            "type": "pubkey"
+          },
+          {
+            "name": "memo",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "missing": [
+    {
+      "signature": "3ChjaDHLvRPXmj5Z9oRzNT5TMRyoEU1VYkgxNBPyW3FwvAwvDQ2mEX4o7UXNwTjWfxoYQBdbZx7Uo9n8n2Jf6f66",
+      "id": 1002,
+      "amount": 64,
+      "who": "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB",
+      "memo": "order-2"
+    },
+    {
+      "signature": "3zvx7weVvEowF9P4d7v9mWmVDV1egfjY4rudQPPopWdSVTm7S519NcmEoJAWMpxn7NFRWVtqE8dJz7yBW2uEcQrn",
+      "id": 1005,
+      "amount": 85,
+      "who": "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB",
+      "memo": "order-5"
+    },
+    {
+      "signature": "3Py8oBS9zuqu38EbXsq4SWHisxga93Jci6ZsyCBR4kXAmi3WmpZdZoznUM6aPsCCL34G414Jkrp7gVVoq3qESsyY",
+      "id": 1007,
+      "amount": 99,
+      "who": "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB",
+      "memo": "order-7"
+    }
+  ],
+  "duplicates": [
+    "5sXb3PSM1imBoS8hChxwT1UihxetKwCrnw6gJBy1cNAWvgtpTv2aULvi26oMZgn11nzRPLqcUKCiFrUuSKXWBuW1",
+    "nQC1nTcxKqJnPcQkmKgFAqRdSt8GyZ65LYUWbRt8Tz69X8PcKdQSzfFZ32AcpgcR7mhCT8hrLYUFrcy22N5qg54"
+  ],
+  "extra": [
+    "EXTRAmockedSignatureNotInTheReferenceSet1111111111111111111111111"
+  ]
+}
