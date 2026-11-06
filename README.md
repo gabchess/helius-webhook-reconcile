@@ -4,14 +4,6 @@ A Rust CLI that finds the Helius webhook events your endpoint never received. It
 
 The Helius webhooks FAQ says: "If all retry attempts fail, the event is permanently lost" ([source](https://www.helius.dev/docs/faqs/webhooks), read 2026-11-06). This tool covers the step after that.
 
-## Data tags
-
-Each output block below names where its data came from.
-
-- `run live`: recorded from a real Helius call.
-- `mocked`: built by hand.
-- `litesvm`: recorded from the `event-lab` test program in LiteSVM.
-
 ## Quick start (offline, no key)
 
 ```
@@ -19,7 +11,7 @@ cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received
 echo $?
 ```
 
-Output. The reference is `run live` (one `getTransactionsForAddress` call). The received set is `mocked`, so the 2 missing rows test the tool and are not a real loss.
+Data tags: `run live` is a real Helius call, `mocked` is hand-built, `litesvm` comes from LiteSVM. Here the received set is `mocked`, so the 2 missing rows are a test, not a real loss.
 
 ```
 reference 100 (run live), received 97 (mocked), status succeeded
@@ -34,7 +26,7 @@ extra (received, not in reference): 0
 1
 ```
 
-Exit code 0 means nothing is missing. 1 means events are missing. 2 means the run failed, for example on bad input.
+Exit code 0 means nothing is missing, 1 means events are missing, 2 means the run failed.
 
 Enhanced webhooks do not send failed transactions, so the default `--status succeeded` leaves the 3 failed rows out. Use `--status any` for a raw webhook.
 
@@ -50,17 +42,17 @@ No local Rust? Prefix the command with `docker run --rm -v "$PWD:/w" -w /w rust:
 
 ## Key setup
 
-The tool reads `HELIUS_API_KEY` from the environment. `.env.example` is a template only. Keep the filled file outside the repo and load it for one command:
+The tool reads `HELIUS_API_KEY` from the environment. Keep a filled copy of `.env.example` outside the repo and load it for one command:
 
 ```
 ( set -a; . ~/.secrets/helius.env; set +a; cargo run -q -p webhook-reconcile -- diff ... --live )
 ```
 
-The tool never prints the key. Its errors carry only the error type and code.
+The tool never prints the key.
 
 ## Live run
 
-Page an outage window, refetch the missing signatures, and write a backfill file:
+Page an outage window, refetch the missing rows and write a backfill:
 
 ```
 cargo run -q -p webhook-reconcile -- diff --received received.json \
@@ -68,13 +60,17 @@ cargo run -q -p webhook-reconcile -- diff --received received.json \
   --live --backfill-out backfill.json
 ```
 
-`--received` takes a JSON array of webhook payloads or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`.
+The live calls go to Helius mainnet (`mainnet.helius-rpc.com`).
 
-`backfill.json` holds raw webhook payloads (`slot`, `blockTime`, `transaction`, `meta`), oldest slot first. A recorded run on Jupiter v6 is in [docs/run-log/2026-11-06-live-jupiter-v6.txt](docs/run-log/2026-11-06-live-jupiter-v6.txt): 102 reference rows (`run live`) and 7 missing against the `mocked` received set.
+Rows that your webhook's filters exclude are not missing. Check the filters before you replay.
 
-Other flags: `--idl` decodes the Anchor events of the missing transactions. `--json` prints the report as JSON. `--reference-pages` and `--refetch-from` replay recorded responses offline.
+`--received` takes one flat JSON array of transactions or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`. One array per POST body does not parse. Flatten it first with `jq -s 'flatten(1)' posts/*.json > received.json`.
 
-`helius-triage` turns a `--json` report and a ticket into a draft reply that a person reads before sending. See [skills/helius-triage/SKILL.md](skills/helius-triage/SKILL.md).
+`backfill.json` holds raw webhook payloads (`slot`, `blockTime`, `transaction`, `meta`), oldest slot first. [A recorded Jupiter v6 run](docs/run-log/2026-11-06-live-jupiter-v6.txt): 102 reference rows (`run live`), 7 missing against a `mocked` received set.
+
+Other flags: `--idl` decodes Anchor events. `--json` prints JSON. `--reference-pages` and `--refetch-from` replay recorded responses offline.
+
+`helius-triage` drafts a support reply from a `--json` report. See [skills/helius-triage/SKILL.md](skills/helius-triage/SKILL.md).
 
 ## How to know it works
 
@@ -82,16 +78,16 @@ Other flags: `--idl` decodes the Anchor events of the missing transactions. `--j
 cargo test -p webhook-reconcile --locked
 ```
 
-The tests run offline with no key. On 2026-11-06 they printed `test result: ok` with 142 passed. The recorded run is in [docs/run-log/2026-11-06-cargo-test.txt](docs/run-log/2026-11-06-cargo-test.txt). CI runs them and the LiteSVM recording of `event-lab` on every pull request.
+Offline, no key. On 2026-11-06 it printed `test result: ok`, 142 passed ([run log](docs/run-log/2026-11-06-cargo-test.txt)).
 
 ## Layout
 
 ```
 crates/webhook-reconcile/   # the CLI: diff, paging, refetch, decode, backfill, triage
-programs/event-lab/         # Anchor program that emits test events
-lab/                        # records event-lab in LiteSVM into fixtures/
+programs/event-lab/         # Anchor test program
+lab/                        # LiteSVM recorder for fixtures/
 fixtures/                   # recorded Helius responses, tickets, FAQ snapshot
-skills/helius-triage/       # agent skill for the triage step
+skills/helius-triage/       # triage skill
 docs/run-log/               # recorded runs
 ```
 
@@ -99,7 +95,7 @@ docs/run-log/               # recorded runs
 
 - It never sends a transaction or loads a keypair.
 - It does not post the backfill. It writes a file and you replay it.
-- It does not build the enhanced webhook shape. Helius computes its `type`, `source`, `description` and `events` fields.
+- It does not build the enhanced webhook fields (`type`, `source`, `description`, `events`).
 
 ## License
 

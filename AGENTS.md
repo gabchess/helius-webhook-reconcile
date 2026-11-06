@@ -16,6 +16,8 @@ docker run --rm -v "$PWD:/w" -w /w rust:1 sh -c "rustup component add rustfmt cl
 docker run --rm -v "$PWD:/w" -w /w solanafoundation/anchor:v1.0.2 bash -c "export HOME=/root && anchor build --ignore-keys && cd lab && npm ci --no-audit --no-fund && npm test"
 ```
 
+The `anchor` CI job also runs `cargo clippy -p event-lab --all-targets -- -D warnings` and `git diff --exit-code -- fixtures`.
+
 CI runs the same steps. The required checks on `main` are `rust` and `anchor`. Do not rename those jobs.
 
 ## Key
