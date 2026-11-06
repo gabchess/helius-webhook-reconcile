@@ -6,7 +6,7 @@ pub mod refetch;
 pub mod types;
 
 pub use decode::{decode_missing, program_data_lines, DecodeError, Idl};
-pub use refetch::{refetch_missing, HeliusRpc, RecordedSource, TxSource};
+pub use refetch::{refetch_missing, HeliusRpc, RecordedSource, RpcError, TxSource};
 
 use anyhow::{anyhow, Result};
 use serde_json::Value;

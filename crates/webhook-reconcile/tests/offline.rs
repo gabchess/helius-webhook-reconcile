@@ -8,7 +8,7 @@ use webhook_reconcile::refetch::{parse_batch_response, TxSource};
 use webhook_reconcile::types::{RefEntry, Signature};
 use webhook_reconcile::{
     decode_missing, diff, parse_received, parse_reference, program_data_lines, refetch_missing,
-    types::Status, DecodeError, HeliusRpc, Idl, RecordedSource,
+    types::Status, DecodeError, HeliusRpc, Idl, RecordedSource, RpcError,
 };
 
 fn fx(name: &str) -> Value {
@@ -287,10 +287,15 @@ fn refetch_fails_when_the_source_does_not_have_a_signature() {
 fn batch_response_errors_are_loud() {
     let requested = [sig("a")];
     let rpc_error = json!([{"id": "0", "error": {"code": -32000, "message": "boom"}}]);
-    assert!(parse_batch_response(&requested, &rpc_error)
-        .unwrap_err()
-        .to_string()
-        .contains("boom"));
+    let err = parse_batch_response(&requested, &rpc_error).unwrap_err();
+    assert_eq!(
+        err,
+        RpcError::JsonRpc {
+            code: Some(-32000),
+            signature: sig("a")
+        }
+    );
+    assert!(!err.to_string().contains("boom"));
     let not_found = json!([{"id": "0", "result": null}]);
     assert!(parse_batch_response(&requested, &not_found)
         .unwrap_err()
@@ -319,7 +324,8 @@ fn transport_error_text_never_contains_the_key() {
     assert!(!text.contains("api-key"), "key parameter leaked: {text}");
 }
 
-fn serve_once(status_line: &'static str, body: &'static str) -> String {
+fn serve_once(status_line: &'static str, body: &str) -> String {
+    let body = body.to_string();
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -376,6 +382,73 @@ fn status_error_text_never_contains_the_key() {
         .fetch_full(&[sig("a")])
         .unwrap_err();
     assert_key_absent(&err);
+}
+
+#[test]
+fn status_error_text_key_across_the_cut_never_leaks() {
+    const KEY: &str = "0123abcd-4567-89ef-0123-456789abcdef";
+    let head = r#"{"error":"unauthorized","detail":""#;
+    let body = format!("{head}{}{KEY}\"}}", "x".repeat(170 - head.len()));
+    assert_eq!(body.find(KEY), Some(170));
+    let base = serve_once("401 Unauthorized", &body);
+    let err = HeliusRpc::new(&base, KEY)
+        .fetch_full(&[sig("a")])
+        .unwrap_err();
+    let text = format!("{err:#} {err:?}");
+    assert!(!text.contains(&KEY[..20]), "key prefix leaked: {text}");
+    assert!(!text.contains("api-key="), "key parameter leaked: {text}");
+}
+
+#[test]
+fn rpc_error_display_is_exact_for_every_variant() {
+    let cases = [
+        (
+            RpcError::Transport {
+                kind: ureq::ErrorKind::ConnectionFailed,
+            },
+            "Helius RPC transport error: ConnectionFailed",
+        ),
+        (
+            RpcError::Status { code: 401 },
+            "Helius RPC returned HTTP 401",
+        ),
+        (
+            RpcError::JsonRpc {
+                code: Some(-32602),
+                signature: sig("a"),
+            },
+            "getTransaction failed for a with code -32602",
+        ),
+        (
+            RpcError::JsonRpc {
+                code: None,
+                signature: sig("a"),
+            },
+            "getTransaction failed for a with no code",
+        ),
+        (
+            RpcError::NotFound {
+                signature: sig("a"),
+            },
+            "transaction a not found",
+        ),
+        (
+            RpcError::BadResult {
+                what: "no meta.logMessages",
+                signature: sig("a"),
+            },
+            "result for a: no meta.logMessages",
+        ),
+        (
+            RpcError::Decode {
+                what: "body is not valid JSON",
+            },
+            "Helius RPC response: body is not valid JSON",
+        ),
+    ];
+    for (err, text) in cases {
+        assert_eq!(err.to_string(), text);
+    }
 }
 
 struct AnswersWith(Vec<RefEntry>);

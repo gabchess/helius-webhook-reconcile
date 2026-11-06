@@ -1,7 +1,7 @@
 //! Refetch only the missing signatures in full mode. The fetch sits behind `TxSource`, so tests replay
 //! recorded responses with no key and no network, and the live path is one small struct.
 use crate::{parse_ref_row, types::*};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -15,13 +15,67 @@ pub trait TxSource {
     fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>>;
 }
 
+/// Why a live fetch or a batch parse failed. Every field is a number, a fixed label, an error
+/// class or a signature we sent. Nothing here holds text from the server or from the request URL,
+/// so no error message can carry the API key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RpcError {
+    /// The request did not complete. Only the ureq error class is kept.
+    Transport { kind: ureq::ErrorKind },
+    /// The server answered with a non-success HTTP status. The body is dropped.
+    Status { code: u16 },
+    /// The server answered a request with a JSON-RPC error. The message is dropped.
+    JsonRpc {
+        code: Option<i64>,
+        signature: Signature,
+    },
+    /// The requested transaction came back as null.
+    NotFound { signature: Signature },
+    /// A result for a requested signature was unusable.
+    BadResult {
+        what: &'static str,
+        signature: Signature,
+    },
+    /// The response did not have the expected shape.
+    Decode { what: &'static str },
+}
+
+impl fmt::Display for RpcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transport { kind } => write!(f, "Helius RPC transport error: {kind:?}"),
+            Self::Status { code } => write!(f, "Helius RPC returned HTTP {code}"),
+            Self::JsonRpc {
+                code: Some(code),
+                signature,
+            } => write!(
+                f,
+                "getTransaction failed for {} with code {code}",
+                signature.0
+            ),
+            Self::JsonRpc {
+                code: None,
+                signature,
+            } => write!(f, "getTransaction failed for {} with no code", signature.0),
+            Self::NotFound { signature } => write!(f, "transaction {} not found", signature.0),
+            Self::BadResult { what, signature } => write!(f, "result for {}: {what}", signature.0),
+            Self::Decode { what } => write!(f, "Helius RPC response: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for RpcError {}
+
 /// Turn a JSON-RPC batch response of `getTransaction` calls into reference entries.
 /// Request `id`s are the indexes into `requested`. Every requested signature must come back with
 /// logs. A JSON-RPC error, a null result (transaction not found) or an unrequested signature fails.
-pub fn parse_batch_response(requested: &[Signature], batch: &Value) -> Result<Vec<RefEntry>> {
-    let items = batch
-        .as_array()
-        .ok_or_else(|| anyhow!("batch response is not a JSON array"))?;
+pub fn parse_batch_response(
+    requested: &[Signature],
+    batch: &Value,
+) -> Result<Vec<RefEntry>, RpcError> {
+    let items = batch.as_array().ok_or(RpcError::Decode {
+        what: "batch is not a JSON array",
+    })?;
     let mut by_sig: HashMap<&Signature, RefEntry> = HashMap::new();
     for item in items {
         let idx = item
@@ -33,35 +87,46 @@ pub fn parse_batch_response(requested: &[Signature], batch: &Value) -> Result<Ve
             })
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|i| *i < requested.len())
-            .ok_or_else(|| anyhow!("batch item has no valid id"))?;
+            .ok_or(RpcError::Decode {
+                what: "batch item has no valid id",
+            })?;
         let want = &requested[idx];
         if let Some(err) = item.get("error") {
-            let msg = err.get("message").and_then(Value::as_str).unwrap_or("?");
-            bail!("getTransaction failed for {}: {msg}", want.0);
+            return Err(RpcError::JsonRpc {
+                code: err.get("code").and_then(Value::as_i64),
+                signature: want.clone(),
+            });
         }
-        let result = item
-            .get("result")
-            .filter(|r| !r.is_null())
-            .ok_or_else(|| anyhow!("transaction {} not found", want.0))?;
+        let bad = |what| RpcError::BadResult {
+            what,
+            signature: want.clone(),
+        };
+        let result =
+            item.get("result")
+                .filter(|r| !r.is_null())
+                .ok_or_else(|| RpcError::NotFound {
+                    signature: want.clone(),
+                })?;
         let got = result
             .pointer("/transaction/signatures/0")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("result for {} has no signature", want.0))?;
+            .ok_or_else(|| bad("no signature"))?;
         if got != want.0 {
-            bail!("asked for {}, got {got}", want.0);
+            return Err(bad("signature differs from the one requested"));
         }
         let entry = parse_ref_row(result, want.clone());
         if entry.logs.is_none() {
-            bail!("result for {} has no meta.logMessages", want.0);
+            return Err(bad("no meta.logMessages"));
         }
         by_sig.insert(want, entry);
     }
     requested
         .iter()
         .map(|s| {
-            by_sig
-                .remove(s)
-                .ok_or_else(|| anyhow!("no response for {}", s.0))
+            by_sig.remove(s).ok_or_else(|| RpcError::BadResult {
+                what: "no response",
+                signature: s.clone(),
+            })
         })
         .collect()
 }
@@ -144,16 +209,15 @@ impl TxSource for RecordedSource {
                        "result": self.results.get(s).cloned().unwrap_or(Value::Null)})
             })
             .collect();
-        parse_batch_response(signatures, &Value::Array(batch))
+        Ok(parse_batch_response(signatures, &Value::Array(batch))?)
     }
 }
 
 /// Live Helius JSON-RPC source. It sends `getTransaction` in batches. The API key lives only in
-/// the request URL held in memory. Debug output never contains it, and every error leaves
-/// `fetch_full` through `redact`, the one place that removes the key and the URL.
+/// the request URL held in memory. Every error leaves as an `RpcError`, which holds no text from
+/// the server or the URL, so there is nothing to redact.
 pub struct HeliusRpc {
     url: String,
-    key: String,
 }
 
 const BATCH_SIZE: usize = 100;
@@ -172,32 +236,23 @@ impl HeliusRpc {
     pub fn new(base: &str, key: &str) -> Self {
         Self {
             url: format!("{base}/?api-key={key}"),
-            key: key.to_string(),
         }
     }
 
-    fn redact(&self, text: &str) -> String {
-        text.replace(&self.url, "<redacted-url>")
-            .replace(&self.key, "<redacted>")
-    }
-
-    fn post(&self, body: &Value) -> Result<Value> {
+    fn post(&self, body: &Value) -> Result<Value, RpcError> {
         let resp = ureq::post(&self.url)
             .timeout(Duration::from_secs(30))
             .send_json(body.clone())
             .map_err(|e| match e {
-                ureq::Error::Status(code, resp) => {
-                    let body = resp.into_string().unwrap_or_default();
-                    let body: String = body.chars().take(200).collect();
-                    anyhow!("Helius RPC returned HTTP {code}: {body}")
-                }
-                ureq::Error::Transport(t) => anyhow!("Helius RPC transport error: {t}"),
+                ureq::Error::Status(code, _) => RpcError::Status { code },
+                ureq::Error::Transport(t) => RpcError::Transport { kind: t.kind() },
             })?;
-        resp.into_json::<Value>()
-            .context("read Helius RPC response")
+        resp.into_json::<Value>().map_err(|_| RpcError::Decode {
+            what: "body is not valid JSON",
+        })
     }
 
-    fn fetch_batches(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
+    fn fetch_batches(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>, RpcError> {
         let mut out = Vec::new();
         for chunk in signatures.chunks(BATCH_SIZE) {
             let body: Vec<Value> = chunk
@@ -219,14 +274,13 @@ impl HeliusRpc {
 impl fmt::Debug for HeliusRpc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HeliusRpc")
-            .field("key", &"<redacted>")
+            .field("url", &"<redacted>")
             .finish()
     }
 }
 
 impl TxSource for HeliusRpc {
     fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>> {
-        self.fetch_batches(signatures)
-            .map_err(|e| anyhow!("{}", self.redact(&format!("{e:#}"))))
+        Ok(self.fetch_batches(signatures)?)
     }
 }

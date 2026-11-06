@@ -65,7 +65,7 @@ No local cargo? Run it in Docker with `docker run --rm -v "$PWD:/w" -w /w rust:1
 
 ## Setup
 
-Live runs need a Helius API key. Create one at https://dashboard.helius.dev and export it as `HELIUS_API_KEY`. Never commit it. The offline tests need no key. Load the key only inside the subshell of one command, for example `( set -a; . ~/.secrets/helius.env; set +a; webhook-reconcile diff ... --live )`. The tool never prints the key and removes it from error text.
+Live runs need a Helius API key. Create one at https://dashboard.helius.dev and export it as `HELIUS_API_KEY`. Never commit it. The offline tests need no key. Load the key only inside the subshell of one command, for example `( set -a; . ~/.secrets/helius.env; set +a; webhook-reconcile diff ... --live )`. The tool never prints the key. Error messages carry only the error type and code, never server text or the request URL.
 
 ## Anchor program and LiteSVM recording
 
