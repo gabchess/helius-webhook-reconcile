@@ -12,7 +12,6 @@ use std::time::Duration;
 /// Where full transactions come from. One call may ask for many signatures.
 /// An implementation returns one entry per requested signature, with `logs` set, or an error.
 pub trait TxSource {
-    /// Fetch the given signatures in full mode.
     fn fetch_full(&self, signatures: &[Signature]) -> Result<Vec<RefEntry>>;
 
     /// Fetch the given signatures as full transaction results, one per signature, in request order.
@@ -266,7 +265,6 @@ impl RecordedSource {
         })
     }
 
-    /// Every request so far, one list of signatures per call.
     pub fn calls(&self) -> Vec<Vec<Signature>> {
         self.calls.borrow().clone()
     }
@@ -320,7 +318,6 @@ impl HeliusRpc {
         Ok(Self::new("https://mainnet.helius-rpc.com", &key))
     }
 
-    /// Build with an explicit base URL and key.
     pub fn new(base: &str, key: &str) -> Self {
         Self {
             url: format!("{base}/?api-key={key}"),

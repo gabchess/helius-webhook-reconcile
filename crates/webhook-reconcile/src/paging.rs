@@ -13,13 +13,9 @@ use std::fmt;
 /// `filters.slot` and `filters.blockTime` of getTransactionsForAddress.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Window {
-    /// First slot to include.
     pub slot_gte: Option<u64>,
-    /// Last slot to include.
     pub slot_lte: Option<u64>,
-    /// First block time (Unix seconds) to include.
     pub time_gte: Option<u64>,
-    /// Last block time (Unix seconds) to include.
     pub time_lte: Option<u64>,
 }
 
@@ -29,12 +25,10 @@ pub struct Window {
 pub struct PageToken(String);
 
 impl PageToken {
-    /// Wrap a token string from a response.
     pub fn new(token: impl Into<String>) -> Self {
         Self(token.into())
     }
 
-    /// The token text, for the next request.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -50,9 +44,7 @@ impl fmt::Debug for PageToken {
 /// `token` changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRequest {
-    /// Address whose history is read.
     pub address: String,
-    /// The outage window.
     pub window: Window,
     /// Rows per page, 1 to 1000.
     pub limit: u32,
@@ -63,15 +55,11 @@ pub struct PageRequest {
 /// One page of signatures-mode rows and the token for the next page. `next` is `None` on the last page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
-    /// Rows exactly as the server returned them.
     pub rows: Vec<Value>,
-    /// `paginationToken` of the response.
     pub next: Option<PageToken>,
 }
 
-/// Where reference pages come from.
 pub trait ReferenceSource {
-    /// Fetch the page the request names.
     fn fetch_page(&self, req: &PageRequest) -> Result<Page>;
 }
 
@@ -242,7 +230,6 @@ impl RecordedPages {
         })
     }
 
-    /// Every request so far, in order.
     pub fn requests(&self) -> Vec<PageRequest> {
         self.requests.borrow().clone()
     }

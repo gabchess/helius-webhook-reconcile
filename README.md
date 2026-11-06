@@ -66,7 +66,7 @@ Rows that your webhook's filters exclude are not missing. Check the filters befo
 
 `--received` takes one flat JSON array of transactions or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`. One array per POST body does not parse. Flatten it first with `jq -s 'flatten(1)' posts/*.json > received.json`.
 
-`backfill.json` holds raw webhook payloads (`slot`, `blockTime`, `transaction`, `meta`), oldest slot first. [A recorded Jupiter v6 run](docs/run-log/2026-11-06-live-jupiter-v6.txt): 102 reference rows (`run live`), 7 missing against a `mocked` received set.
+`backfill.json` holds raw webhook payloads (`slot`, `blockTime`, `transaction`, `meta`), oldest slot first.
 
 Other flags: `--idl` decodes Anchor events. `--json` prints JSON. `--reference-pages` and `--refetch-from` replay recorded responses offline.
 
@@ -76,7 +76,7 @@ Other flags: `--idl` decodes Anchor events. `--json` prints JSON. `--reference-p
 cargo test -p webhook-reconcile --locked
 ```
 
-Offline, no key. On 2026-11-06 it printed `test result: ok`, 142 passed ([run log](docs/run-log/2026-11-06-cargo-test.txt)).
+Offline, no key. It prints `test result: ok`, 12 passed for the CLI and 86 passed for `tests/offline.rs`.
 
 ## Layout
 
@@ -85,7 +85,6 @@ crates/webhook-reconcile/   # the CLI: diff, paging, refetch, decode, backfill
 programs/event-lab/         # Anchor test program
 lab/                        # LiteSVM recorder for fixtures/
 fixtures/                   # recorded Helius responses and test inputs
-docs/run-log/               # recorded runs
 ```
 
 ## What it does not do

@@ -1,4 +1,3 @@
-//! Data shapes. Everything else in this crate is a function between these types.
 use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::{Map, Value};
