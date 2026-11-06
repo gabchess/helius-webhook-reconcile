@@ -1,0 +1,12 @@
+{
+  "name": "event-lab-recorder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test hello.test.mjs"
+  },
+  "devDependencies": {
+    "@solana/kit": "8.6.0",
+    "litesvm": "1.6.2"
+  }
+}
