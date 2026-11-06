@@ -27,7 +27,7 @@ import {
   signTransactionMessageWithSigners,
 } from "@solana/kit";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const PROGRAM_SO = join(ROOT, "target/deploy/event_lab.so");
 const BUILT_IDL = join(ROOT, "target/idl/event_lab.json");
 const OUT = join(ROOT, "fixtures");

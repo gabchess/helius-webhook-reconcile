@@ -35,6 +35,6 @@ jobs:
       - name: Clippy event-lab
         run: export HOME=/root && cargo clippy -p event-lab --all-targets -- -D warnings
       - name: Record events in LiteSVM
-        run: export HOME=/root && cd lab && npm ci --no-audit --no-fund && npm test
+        run: export HOME=/root && cd programs/event-lab/record && npm ci --no-audit --no-fund && npm test
       - name: Fixtures match a fresh recording
         run: git config --global --add safe.directory "$PWD" && git diff --exit-code -- fixtures

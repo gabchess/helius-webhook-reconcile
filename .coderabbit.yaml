@@ -14,10 +14,14 @@ reviews:
       instructions: |
         Rust CLI code. Check error handling (no unwrap in non-test code), that tests run offline with no API key,
         and that no HELIUS_API_KEY or URL containing a key is logged, printed or stored in a fixture.
-    - path: "programs/**"
+    - path: "programs/event-lab/src/**"
       instructions: |
         Anchor program code. Check account validation, signer checks and event emission.
         programs/event-lab emits the events that the Rust decoder reads. Its IDL is committed as fixtures/event_lab.idl.json.
+    - path: "programs/event-lab/record/**"
+      instructions: |
+        Node recorder that runs the built program in LiteSVM and writes fixtures/event-lab-*.json.
+        The payer key is fixed, so a fresh recording must equal the committed fixtures. CI fails on any drift.
     - path: ".github/workflows/**"
       instructions: |
         Actions must be pinned to a commit SHA or an exact version. Job names rust and anchor are required
