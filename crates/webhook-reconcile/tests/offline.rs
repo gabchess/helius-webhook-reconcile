@@ -754,6 +754,80 @@ fn page_request_body_is_exact() {
 }
 
 #[test]
+fn page_request_body_carries_every_window_bound() {
+    let body_for = |window: Window| {
+        page_request_body(&PageRequest {
+            address: "addr".into(),
+            window,
+            limit: 4,
+            token: None,
+        })["params"][1]["filters"]
+            .clone()
+    };
+    let full = Window {
+        slot_gte: Some(100),
+        slot_lte: Some(109),
+        time_gte: Some(1_700_000_000),
+        time_lte: Some(1_700_000_100),
+    };
+    assert_eq!(
+        body_for(full),
+        json!({"status": "any",
+               "slot": {"gte": 100, "lte": 109},
+               "blockTime": {"gte": 1_700_000_000u64, "lte": 1_700_000_100u64}})
+    );
+    assert_eq!(
+        body_for(Window {
+            slot_gte: Some(100),
+            ..Window::default()
+        }),
+        json!({"status": "any", "slot": {"gte": 100}})
+    );
+    assert_eq!(
+        body_for(Window {
+            slot_lte: Some(109),
+            ..Window::default()
+        }),
+        json!({"status": "any", "slot": {"lte": 109}})
+    );
+    assert_eq!(
+        body_for(Window {
+            time_gte: Some(1_700_000_000),
+            ..Window::default()
+        }),
+        json!({"status": "any", "blockTime": {"gte": 1_700_000_000u64}})
+    );
+    assert_eq!(
+        body_for(Window {
+            time_lte: Some(1_700_000_100),
+            ..Window::default()
+        }),
+        json!({"status": "any", "blockTime": {"lte": 1_700_000_100u64}})
+    );
+}
+
+#[test]
+fn a_page_row_without_a_signature_is_a_loud_error() {
+    let no_signature = json!({"slot": 1, "err": null});
+    let first = recorded(json!([{"after": null,
+        "result": {"data": [no_signature.clone()]}}]));
+    let err = read_pages(&first, 10).unwrap_err();
+    assert!(
+        err.to_string().contains("page 1 row 0 has no signature"),
+        "{err:#}"
+    );
+    let later = recorded(json!([
+        {"after": null, "result": {"data": [row("a")], "paginationToken": "1:0"}},
+        {"after": "1:0", "result": {"data": [row("b"), no_signature]}}
+    ]));
+    let err = read_pages(&later, 10).unwrap_err();
+    assert!(
+        err.to_string().contains("page 2 row 1 has no signature"),
+        "{err:#}"
+    );
+}
+
+#[test]
 fn an_empty_page_without_a_token_ends_the_read() {
     let source =
         recorded(json!([{"after": null, "result": {"data": [], "paginationToken": null}}]));
@@ -1131,6 +1205,8 @@ fn cli_pages_the_outage_window_and_writes_the_backfill_file() {
     let out_arg = out_path.to_str().unwrap();
     let mut args = E2E.to_vec();
     args.extend([
+        "--time-lte",
+        "1700000100",
         "--idl",
         "fixtures/event_lab.idl.json",
         "--backfill-out",
