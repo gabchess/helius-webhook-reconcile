@@ -9,7 +9,7 @@ cargo run -q -p webhook-reconcile -- diff --received fixtures/gtfa-live-received
 echo $?
 ```
 
-Offline, no key. The reference is a real Helius call (`run live`). The received set is `mocked`, so the 2 missing rows are a test, not a real loss. Exit code 0 means nothing is missing, 1 means events are missing, 2 means the run failed.
+Offline, no key. The reference is a real Helius call (`run live`) and the received set is `mocked`, so the 2 missing rows are a test. Exit code 0 means nothing is missing under `--status` (default `succeeded` skips failed transactions; `--status any` includes them), 1 means events are missing, 2 means the run failed.
 
 ```
 reference 100 (run live), received 97 (mocked), status succeeded
@@ -26,7 +26,7 @@ extra (received, not in reference): 0
 
 ## Live run
 
-Set `HELIUS_API_KEY` (from https://dashboard.helius.dev) in the environment. The tool never prints it. Page an outage window, refetch the missing rows and write a backfill:
+Set `HELIUS_API_KEY` (from https://dashboard.helius.dev) in the environment. The tool never prints it. The live calls go to Helius mainnet. Write a backfill for an outage window:
 
 ```
 cargo run -q -p webhook-reconcile -- diff --received received.json \
@@ -34,17 +34,19 @@ cargo run -q -p webhook-reconcile -- diff --received received.json \
   --live --backfill-out backfill.json
 ```
 
-`--received` takes one flat JSON array of transactions or signature strings. Flatten saved POST bodies first with `jq -s 'flatten(1)' posts/*.json > received.json`. Add `--idl <idl.json>` to decode Anchor events.
+The backfill is raw webhook shape (`slot`, `blockTime`, `transaction`, `meta`, oldest slot first) with no enhanced fields, so check that your endpoint accepts raw payloads before you replay. Rows your webhook's filters exclude are not missing, so check the filters before you replay.
+
+`--received` takes a JSON array of transactions or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`. Flatten saved POST bodies with `jq -s 'flatten(1)' posts/*.json > received.json`. Add `--idl <idl.json>` to decode Anchor events.
 
 ## Requirements
 
-Rust, or Docker (prefix commands with `docker run --rm -v "$PWD:/w" -w /w rust:1`). Tests run offline with no key. They print `test result: ok`, 12 passed and 88 passed:
+Rust, or Docker (prefix commands with `docker run --rm -v "$PWD:/w" -w /w rust:1`, and add `-e HELIUS_API_KEY` for live runs). Tests run offline with no key. They print `test result: ok`, 12 passed and 88 passed:
 
 ```
 cargo test -p webhook-reconcile --locked
 ```
 
-One test: add `--test offline <name>`.
+To run one test, add its name after the command.
 
 ## License
 

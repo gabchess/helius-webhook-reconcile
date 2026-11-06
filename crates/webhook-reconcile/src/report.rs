@@ -1,4 +1,4 @@
-//! Print one diff run: the JSON report or the text report. Moved out of `main.rs` unchanged.
+//! Print one diff run: the JSON report or the text report.
 use crate::{DecodedEvent, DiffReport, ReceivedSet, ReferenceSet};
 use anyhow::Result;
 use serde_json::json;
