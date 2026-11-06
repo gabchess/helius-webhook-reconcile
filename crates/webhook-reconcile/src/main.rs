@@ -189,7 +189,7 @@ fn run() -> Result<bool> {
     if let (Some(path), Some(payloads)) = (&backfill_out, &payloads) {
         let text = serde_json::to_string_pretty(payloads)?;
         if to_stdout {
-            println!("{text}");
+            writeln!(std::io::stdout().lock(), "{text}")?;
         } else {
             fs::write(path, text + "\n").with_context(|| format!("write {}", path.display()))?;
         }
