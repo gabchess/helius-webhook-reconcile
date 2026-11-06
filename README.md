@@ -68,6 +68,8 @@ cargo run -q -p webhook-reconcile -- diff --received received.json \
   --live --backfill-out backfill.json
 ```
 
+`--received` takes a JSON array of webhook payloads or signature strings, or an object that holds one under `payloads`, `data`, `result`, `response` or `events`.
+
 `backfill.json` holds raw webhook payloads (`slot`, `blockTime`, `transaction`, `meta`), oldest slot first. A recorded run on Jupiter v6 is in [docs/run-log/2026-11-06-live-jupiter-v6.txt](docs/run-log/2026-11-06-live-jupiter-v6.txt): 102 reference rows (`run live`) and 7 missing against the `mocked` received set.
 
 Other flags: `--idl` decodes the Anchor events of the missing transactions. `--json` prints the report as JSON. `--reference-pages` and `--refetch-from` replay recorded responses offline.
@@ -80,7 +82,7 @@ Other flags: `--idl` decodes the Anchor events of the missing transactions. `--j
 cargo test -p webhook-reconcile --locked
 ```
 
-142 offline tests, no key. The recorded run printed 12, 86 and 44 passed ([docs/run-log/2026-11-06-cargo-test.txt](docs/run-log/2026-11-06-cargo-test.txt)). CI runs them and the LiteSVM recording of `event-lab` on every pull request.
+The tests run offline with no key. On 2026-11-06 they printed `test result: ok` with 142 passed. The recorded run is in [docs/run-log/2026-11-06-cargo-test.txt](docs/run-log/2026-11-06-cargo-test.txt). CI runs them and the LiteSVM recording of `event-lab` on every pull request.
 
 ## Layout
 
@@ -90,7 +92,7 @@ programs/event-lab/         # Anchor program that emits test events
 lab/                        # records event-lab in LiteSVM into fixtures/
 fixtures/                   # recorded Helius responses, tickets, FAQ snapshot
 skills/helius-triage/       # agent skill for the triage step
-docs/                       # run logs and the demo script
+docs/run-log/               # recorded runs
 ```
 
 ## What it does not do
